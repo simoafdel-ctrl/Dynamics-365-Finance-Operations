@@ -1,127 +1,161 @@
-# D365 F&O MCP Server
+# D365FO MCP Server — patched (prefix-first naming)
 
-<div align="center">
+Fork of [dynamics365ninja/d365fo-mcp-server](https://github.com/dynamics365ninja/d365fo-mcp-server)
+**v1.17.3**, patched with a configurable team extension-naming convention.
 
-**20 AI tools that know every X++ class, table, form, and EDT in your D365FO codebase**
-
-[![npm](https://img.shields.io/npm/v/d365fo-mcp.svg?logo=npm&color=cb3837)](https://www.npmjs.com/package/d365fo-mcp)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D24.0.0-brightgreen.svg)](https://nodejs.org/)
-[![TypeScript](https://img.shields.io/badge/TypeScript-7.0-blue.svg)](https://www.typescriptlang.org/)
-[![Tests](https://img.shields.io/badge/tests-5000%2B-brightgreen.svg)](docs/TESTING.md)
-<!-- coverage-badge:start -->
-[![Core coverage](https://img.shields.io/badge/core_coverage-100%25-brightgreen.svg)](eval/COVERAGE.md) [![Total coverage](https://img.shields.io/badge/total_coverage-100%25-lightgrey.svg)](eval/COVERAGE.md)
-<!-- coverage-badge:end -->
-
-*Grounded AI development for Dynamics 365 Finance & Operations — works with GitHub Copilot and Claude Code*
-
-[![Install in VS Code](https://img.shields.io/badge/VS_Code-Install_d365fo-0098FF?style=flat-square&logo=githubcopilot&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=d365fo&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22d365fo_server_url%22%2C%22description%22%3A%22D365FO%20MCP%20server%20URL%20(e.g.%20https%3A%2F%2Fyour-server.azurewebsites.net%2Fmcp%2F)%22%7D%5D&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22%24%7Binput%3Ad365fo_server_url%7D%22%7D)
-[![Install in VS Code Insiders](https://img.shields.io/badge/VS_Code_Insiders-Install_d365fo-24bfa5?style=flat-square&logo=githubcopilot&logoColor=white)](https://insiders.vscode.dev/redirect/mcp/install?name=d365fo&quality=insiders&inputs=%5B%7B%22type%22%3A%22promptString%22%2C%22id%22%3A%22d365fo_server_url%22%2C%22description%22%3A%22D365FO%20MCP%20server%20URL%20(e.g.%20https%3A%2F%2Fyour-server.azurewebsites.net%2Fmcp%2F)%22%7D%5D&config=%7B%22type%22%3A%22http%22%2C%22url%22%3A%22%24%7Binput%3Ad365fo_server_url%7D%22%7D)
-[![Add to Cursor](https://img.shields.io/badge/Cursor-Add_d365fo-000000?style=flat-square&logo=cursor&logoColor=white)](https://cursor.com/install-mcp?name=d365fo&config=eyJ1cmwiOiJodHRwczovL3lvdXItc2VydmVyLmF6dXJld2Vic2l0ZXMubmV0L21jcC8ifQ%3D%3D)
-
-*These connect an editor to a server that is already deployed — see [Quick Start](#quick-start) if you still need to set one up.*
-
-</div>
+Every value shown below (`ABC`, `ABC_`, `XYZ`) is a **placeholder**. The real prefix and
+model name are read from each machine's configuration at runtime — nothing is hard-coded,
+so one single build serves every environment.
 
 ---
 
-## Why
+## What the patch adds
 
-AI assistants excel at C#, Python, and JavaScript. X++ is different: your D365FO codebase is private, deeply customized, and invisible to every model — so AI confidently generates code that doesn't compile.
+The upstream server ships two extension-naming styles (`prefix`, `model-name`). This fork
+adds a third value for the `EXTENSION_NAMING_STYLE` setting: **`prefix-first`**.
 
-This server pre-indexes your entire D365FO installation (580 000+ symbols across standard, ISV, and custom models) and exposes it as 20 specialized MCP tools. Every signature, every CoC wrapper, every label, every form pattern — verified against your real metadata **before** the AI writes a single line.
+When `prefix-first` is active, the server names objects like this — automatically, with no
+manual naming and no token injection to override:
 
-![Solution Architecture](docs/img/solution-architecture-diagram.svg)
+| Object kind | Produced name | Example (prefix `ABC_`, model `ABC`) |
+|-------------|---------------|--------------------------------------|
+| CoC class extension | `{Prefix}_{Base}_Extension` — prefix first, underscore-separated | `ABC_SalesFormLetter_Extension` |
+| AOT element extension (table, form, security, menu, menu item, enum, EDT, data entity) | `{Base}.{ModelName}` — the model name after the dot, **no** "Extension" word (this is what Visual Studio generates natively) | `SalesLine.ABC` |
+| New non-extension object (EDT, form, class, menu item…) | `{Prefix}_{Name}` | `ABC_SomeNewObject` |
 
-| Task | Without this server | With this server |
-|------|--------------------|------------------|
-| Method signatures | Guessed → compile errors | Exact, from your codebase |
-| Existing CoC wrappers | Manual AOT search | `extension_info(mode="coc")` in < 50 ms |
-| New forms | Hand-written XML, broken patterns | Cloned from reference forms, validated against the pattern catalog |
-| Labels | Hardcoded strings | Right `@SYS`/`@MODULE` key found instantly |
-| Security chains | Hours of manual tracing | Role → Duty → Privilege → Entry Point in one call |
-| Generated code | Hallucinated fields and types | Every reference proven against the index, gated before write |
+### Two independent tokens
+The convention deliberately uses **two different sources**:
+- **CoC classes** and **new objects** take the **object prefix** (`naming.prefix`, e.g. `ABC_`).
+- **Dot-notation extensions** take the **model name** (`workspace.modelName`), matching the
+  Visual Studio default.
 
----
+These are usually the same, but not always. If a site's model is named differently from its
+object prefix — say model `XYZ` with prefix `ABC_` — then a CoC class becomes
+`ABC_SalesLine_Extension` while a table extension becomes `SalesLine.XYZ`. Both are handled
+correctly and independently.
 
-## Capabilities
+### Idempotent (safe to re-run)
+Re-normalising a name that is already correct is a no-op. This means:
+- No double-prefix: passing an already-prefixed name never yields `ABC_SalesLineABC_Extension`.
+- Migration: a stale `SalesLine.ABCExtension` left by the old `prefix` style is converted to
+  the clean `SalesLine.ABC`.
 
-| Feature | Description |
-|---|---|
-| 🔍 **Full-codebase intelligence** | 580K+ symbols indexed: classes, tables, forms, EDTs, enums, labels (20M+ rows), security artifacts — FTS5 search in < 10 ms |
-| 🛡️ **Grounded generation** | Fail-closed gates: `prepare` issues grounding tokens, `validate_code(mode="references")` proves every identifier, `validate_code(mode="syntax")` enforces best practices — hallucinated code never reaches disk |
-| 🧩 **Form pattern engine** | Complete catalog of Microsoft form patterns and sub-patterns: recommends the right pattern, clones reference forms with datasource re-binding, **deterministically expands** patterns that have no reference form, **auto-repairs** a form's missing required controls, validates structure and blocks invalid writes |
-| ✍️ **Safe metadata writes** | C# bridge uses Microsoft's own `IMetadataProvider` wherever it can express the object; the few types and ops it cannot go through structured XML writers with ambiguity guards — never blind string replacement. Automatic `.rnrproj` registration, one-call undo |
-| 🏗️ **SDLC integration** | MSBuild compilation with structured diagnostics, DB sync, xppbp best practices, SysTestRunner — all from chat |
-| 📐 **X++ knowledge base** | Queryable rules: select grammar, CoC authoring, financial dimensions, the posting engine (`LedgerVoucher`), number sequences, `SysExtension`, Electronic Reporting, AX2012→D365FO migration — prevents deprecated APIs |
-
-### Pattern-grounded form development
-
-Forms are the hardest artifact to generate correctly — each pattern dictates required containers, ordering, and allowed sub-patterns. The form pattern engine makes it a guided pipeline:
-
-```mermaid
-flowchart LR
-    A["object_patterns<br/>(domain=form, action=analyze)"] --> B["object_patterns<br/>(domain=form, action=spec)"]
-    B --> C["generate_object<br/>objectType=form, cloneFrom"]
-    C --> D["object_patterns<br/>(domain=form, action=validate) FP001–FP010"]
-    D -->|clean| E["d365fo_file<br/>(action=create) write + project"]
-    D -->|errors| C
-```
-
-Structural violations (wrong order, missing container, disallowed control) **block the write** — recommendations only warn. Mined pattern statistics from your own environment ground every suggestion in reality.
+This is what prevents the duplicate/parallel extension objects that the default style could
+otherwise create.
 
 ---
 
-## Quick Start
+## Files changed by the patch
+- `src/utils/modelClassifier.ts` — the naming logic (`getExtensionNamingStyle`, `applyObjectPrefix`).
+- `src/utils/objectNamingRules.ts` — the validator, so it expects and suggests the new names.
+- `src/config/settings.ts` — exposes `prefix-first` as an install-time choice.
+- `tests/utils/objectNaming.test.ts` — tests covering the convention and idempotence.
 
-> **From D365FO platform update 10.0.49 (PU74), Visual Studio 2026 is the supported IDE for X++ development** — Microsoft no longer supports VS 2022. Earlier platform versions still use VS 2022 ≥ 17.14. [Details](https://learn.microsoft.com/en-us/dynamics365/fin-ops-core/fin-ops/get-started/whats-new-platform-updates-10-0-49)
+`prefix-first-naming-1.17.3.patch` at the repo root is the standalone patch, kept so the same
+change can be re-applied to a future upstream version.
 
-**Installing on your own D365FO VM** — the usual case. One line in PowerShell installs Node.js if it is missing, installs the server from npm, and runs the setup wizard, which asks where the index should live and builds the C# bridge for you:
+---
+
+## Install on a new dev VM
+
+Prerequisites: **Node.js 18+** and **Git**.
 
 ```powershell
-irm https://raw.githubusercontent.com/dynamics365ninja/d365fo-mcp-server/main/install.ps1 | iex
+git clone https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.git C:\d365fo-mcp-patched
+cd C:\d365fo-mcp-patched
+npm install
+npm run build
 ```
 
-Already have Node.js 24+? Then the one-liner has nothing to bootstrap and you can skip it:
-
-```powershell
-npm install -g d365fo-mcp
-d365fo-mcp setup
-```
-
-Re-running either is safe. An installation made before the npm package existed is a git checkout, and both are left exactly where they are and updated in place.
-
-**Your team already runs a shared server?** Then you install nothing — point your editor at it:
-
-```powershell
-npx d365fo-mcp connect https://your-server.azurewebsites.net
-```
-
-Both paths in full — prerequisites, editor configuration for every scenario, the required instruction file, and how to verify grounding actually works: **[docs/QUICK_START.md](docs/QUICK_START.md)**
+`npm run build` regenerates the `dist/` folder — that is what the MCP clients actually run.
+Then configure the server for the environment (below) and point the clients at
+`C:\d365fo-mcp-patched\dist\index.js`.
 
 ---
 
-## Azure Deployment
+## Configuration per environment
 
-One shared instance for the whole team — the metadata index lives in Blob Storage and downloads automatically on startup.
+Replace `<PREFIX_>` and `<MODEL>` with the values of the environment you are installing on.
 
-[![Deploy to Azure](https://aka.ms/deploytoazurebutton)](https://portal.azure.com/#create/Microsoft.Template/uri/https%3A%2F%2Fraw.githubusercontent.com%2Fdynamics365ninja%2Fd365fo-mcp-server%2Frefs%2Fheads%2Fmain%2Finfrastructure%2Fazuredeploy.json)
+### 1. Server config (`d365fo-mcp.json`)
+This is the file the client passes to the server via the `D365FO_CONFIG` variable. The naming
+section must contain:
 
-Deployment guide: [docs/SETUP_AZURE.md](docs/SETUP_AZURE.md) — includes CI/CD pipeline automation
+```json
+"naming": {
+  "prefix": "<PREFIX_>",
+  "prefixSource": "config",
+  "extensionStyle": "prefix-first"
+}
+```
+- `prefix` — the object prefix, e.g. `ABC_` (keep the trailing underscore).
+- `prefixSource: "config"` — forces the server to use that prefix as-is, instead of trying to
+  infer one from existing objects.
+- `extensionStyle: "prefix-first"` — activates this fork's convention.
+
+### 2. Client config (`C:\Users\<user>\.mcp.json`)
+A single file serves **both** clients. Claude Code reads the `mcpServers` key; GitHub Copilot
+(in Visual Studio) reads the `servers` key. Put both, pointing at the same patched server, and
+pass the naming variables directly in `env` (most reliable — it does not depend on how the
+server reads its config file):
+
+```json
+{
+  "servers": {
+    "d365fo-mcp-tools": {
+      "command": "node",
+      "args": ["C:\\d365fo-mcp-patched\\dist\\index.js"],
+      "env": {
+        "D365FO_CONFIG": "<path to d365fo-mcp.json>",
+        "EXTENSION_NAMING_STYLE": "prefix-first",
+        "EXTENSION_PREFIX": "<PREFIX_>",
+        "EXTENSION_PREFIX_SOURCE": "config"
+      }
+    }
+  },
+  "mcpServers": {
+    "d365fo-mcp-tools": {
+      "command": "node",
+      "args": ["C:\\d365fo-mcp-patched\\dist\\index.js"],
+      "env": {
+        "D365FO_CONFIG": "<path to d365fo-mcp.json>",
+        "EXTENSION_NAMING_STYLE": "prefix-first",
+        "EXTENSION_PREFIX": "<PREFIX_>",
+        "EXTENSION_PREFIX_SOURCE": "config"
+      }
+    }
+  }
+}
+```
+
+Both keys point at the same `dist\index.js`, so both clients produce the identical convention.
 
 ---
 
-## Documentation
+## Verify the install (test the fact, not the description)
 
-| Getting started | Reference | Operations |
-|-----------------|-----------|------------|
-| [Quick Start](docs/QUICK_START.md) — connect or install | [All 20 tools](docs/MCP_TOOLS.md) | [Azure deployment](docs/SETUP_AZURE.md) |
-| [Setup scenarios A–F](docs/SETUP.md) | [`.mcp.json` reference](docs/MCP_CONFIG.md) | [DevOps pipelines](docs/SETUP_AZURE.md#azure-devops-pipelines) |
-| [Claude Code setup](docs/SETUP.md#claude-code-cli) | [Configuration](docs/CONFIGURATION.md) | [Testing](docs/TESTING.md) |
-| [Usage examples](docs/USAGE_EXAMPLES.md) — real tool chains | [Architecture](docs/ARCHITECTURE.md) | [Custom / ISV models](docs/CUSTOM_EXTENSIONS.md) |
-| [Changelog](CHANGELOG.md) | [Knowledge authoring](docs/KNOWLEDGE_AUTHORING.md) | [Coverage](eval/COVERAGE.md) — what the badge counts |
-| [Backlog](docs/BACKLOG.md) — deferred work | [New tool checklist](docs/NEW_TOOL_CHECKLIST.md) | [Eval loop](docs/AGENT_EVAL_LOOP.md) — the self-improvement harness |
+Run the real compiled code with the environment's values:
 
-## License
+```powershell
+$env:EXTENSION_NAMING_STYLE="prefix-first"; $env:EXTENSION_PREFIX="<PREFIX_>"; $env:EXTENSION_PREFIX_SOURCE="config"
+node -e "import('file:///C:/d365fo-mcp-patched/dist/utils/objectNaming.js').then(m => { console.log(m.normalizeObjectName('CustTable','class-extension','<MODEL>',()=>{})); console.log(m.normalizeObjectName('CustTable','table-extension','<MODEL>',()=>{})); })"
+```
+Expected output: `<PREFIX>_CustTable_Extension` on the first line, `CustTable.<MODEL>` on the second.
 
-MIT
+Then create one real extension through a client and check the **file name written to disk** —
+not what the assistant says. The AI clients sometimes *describe* the old naming style from
+memory even when the server produces the correct one; only the created file is authoritative.
+
+---
+
+## Updating from upstream
+
+This fork is intentionally pinned at **v1.17.3**. Update only when there is a real reason: a
+blocking bug, a wanted new feature, or a security fix. To update: clone the newer upstream
+version, re-apply the patch (or re-apply its logic to the four files listed above if the patch
+no longer applies cleanly), rebuild, and re-test.
+
+## Test status
+The full upstream test suite passes (6000+ tests). The single failing test
+`publishedFiles.test.ts` also fails on a clean upstream clone — it is a packaging/clone
+artefact, unrelated to this patch.
