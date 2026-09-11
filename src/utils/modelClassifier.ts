@@ -91,10 +91,11 @@ export function getObjectSuffix(): string {
  * Configured via EXTENSION_NAMING_STYLE. Any value other than 'model-name'
  * (including unset) resolves to 'prefix' so existing setups are unchanged.
  */
-export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
-  return process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase() === 'model-name'
-    ? 'model-name'
-    : 'prefix';
+export function getExtensionNamingStyle(): 'prefix' | 'model-name' | 'prefix-first' {
+  const raw = process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase();
+  if (raw === 'model-name') return 'model-name';
+  if (raw === 'prefix-first') return 'prefix-first';
+  return 'prefix';
 }
 
 /**
@@ -268,7 +269,13 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
 
   // model-name style embeds the model name instead of the prefix infix for extension
   // elements/classes only (VS default); regular new objects are unaffected.
-  const useModelName = !!modelName && getExtensionNamingStyle() === 'model-name';
+  const namingStyle = getExtensionNamingStyle();
+  const useModelName = !!modelName && namingStyle === 'model-name';
+  // prefix-first: CoC classes are {Prefix}_{Base}_Extension and AOT extensions are
+  // {Base}.{ModelToken} (bare, what VS generates). The front token is the resolved
+  // prefix without a trailing underscore ("CPG_" -> "CPG").
+  const usePrefixFirst = namingStyle === 'prefix-first';
+  const prefixFirstToken = prefix.replace(/_+$/, '');
 
   // The model name as it may appear inside an object name — identical to modelName
   // unless the name carries characters an AOT identifier cannot (see #892).
@@ -301,6 +308,14 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
       return `${basePart}.${modelToken}`;
     }
 
+    // prefix-first: Base.{ModelToken} — bare model name, exactly what Visual Studio
+    // generates for a dot-notation extension. Deliberately the model token, NOT the
+    // object prefix: a client may have model "Raja" but prefix "RAJ_", giving
+    // SalesLine.Raja here and RAJ_x_Extension for CoC classes. Idempotent.
+    if (usePrefixFirst) {
+      return `${basePart}.${modelToken || prefixFirstToken}`;
+    }
+
     if (suffixPart.toLowerCase().endsWith('extension')) {
       // Always normalize casing (e.g. "CTSOExtension" → "CtsoExtension").
       const correctSuffix = `${extensionInfix}Extension`;
@@ -315,6 +330,27 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
   // objectName must be the base class name + "_Extension" without any prefix infix.
   if (objectName.endsWith('_Extension')) {
     const baseName = objectName.slice(0, -'_Extension'.length);
+
+    // prefix-first: {Prefix}_Base_Extension — prefix at the FRONT. Idempotent:
+    // strip a prefix token already at the front (any case, with or without the
+    // trailing underscore) before re-applying, so "CPG_InventTable" never becomes
+    // "CPG_InventTableCPG_Extension" and re-running a correct name is a no-op.
+    if (usePrefixFirst) {
+      let cleanBase = baseName;
+      const lowerTok = prefixFirstToken.toLowerCase();
+      if (cleanBase.toLowerCase().startsWith(lowerTok + '_')) {
+        cleanBase = cleanBase.slice(prefixFirstToken.length + 1);
+      } else if (cleanBase.toLowerCase().startsWith(lowerTok)) {
+        cleanBase = cleanBase.slice(prefixFirstToken.length);
+      }
+      cleanBase = cleanBase.replace(/^_+/, '');
+      // Also strip a trailing infix-style token ("InventTableCPG") left by the old
+      // 'prefix' style, so switching styles on an existing name is clean.
+      if (cleanBase.toLowerCase().endsWith(lowerTok)) {
+        cleanBase = cleanBase.slice(0, cleanBase.length - prefixFirstToken.length).replace(/_+$/, '');
+      }
+      return `${prefixFirstToken}_${cleanBase}_Extension`;
+    }
 
     // Strip any trailing model-name token first so re-running stays idempotent
     // (avoids Base_ModelName_ModelName_Extension).

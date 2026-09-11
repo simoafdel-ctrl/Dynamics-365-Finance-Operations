@@ -207,6 +207,8 @@ export async function checkObjectNaming(
       modelWritesLandIn(configManager.getWriteAnchorModel() ?? activeModel, activeModel) ||
       '';
     const useModelName = namingStyle === 'model-name' && !!modelName;
+    // prefix-first: CoC classes {Prefix}_{Base}_Extension; AOT extensions {Base}.{ModelToken}.
+    const usePrefixFirst = namingStyle === 'prefix-first';
     // The spelling of the model name that may appear INSIDE an object name — what the
     // write path embeds (applyObjectPrefix → normalizeModelToken, #892). Comparing the
     // raw name instead flagged the very name d365fo_file(create) writes and recommended
@@ -263,7 +265,20 @@ export async function checkObjectNaming(
           `validate_object_naming(objectType="${args.objectType}", proposedName="${name}", baseObjectName="<base>").`,
         );
       } else {
-        if (args.objectType === 'class-extension') {
+        if (args.objectType === 'class-extension' && usePrefixFirst) {
+          // prefix-first: {Prefix}_{Base}_Extension — prefix at the FRONT.
+          const frontToken = (prefix || '').replace(/_+$/, '');
+          const expectedPattern = `${frontToken}_${baseObjectName}_Extension`;
+          if (!name.endsWith('_Extension')) {
+            errors.push(`Class extension names must end with '_Extension'.\n  Expected format: ${expectedPattern}`);
+            if (frontToken) suggestions.push(`Correct name: ${expectedPattern}`);
+          } else if (frontToken && !name.toLowerCase().startsWith(`${frontToken.toLowerCase()}_`)) {
+            warnings.push(`Class extension name does not start with the prefix "${frontToken}_" (EXTENSION_NAMING_STYLE=prefix-first).\n  Current: ${name}\n  Recommended: ${expectedPattern}`);
+          } else if (!name.includes(baseObjectName)) {
+            warnings.push(`Class extension name does not embed the base class "${baseObjectName}".\n  Current: ${name}\n  Recommended: ${expectedPattern}`);
+          }
+          suggestions.push(`AOT name for an element extension instead: ${baseObjectName}.${modelToken || frontToken}`);
+        } else if (args.objectType === 'class-extension') {
           // prefix style → {Base}{Prefix}_Extension; model-name style → {Base}_{ModelToken}_Extension
           const expectedPattern = useModelName
             ? `${baseObjectName}_${modelToken}_Extension`
@@ -300,6 +315,23 @@ export async function checkObjectNaming(
               ? `AOT name for an element extension instead: ${baseObjectName}.${modelToken}`
               : `AOT label for extension file: ${baseObjectName}.${extensionInfix}Extension (if creating table-extension AOT object instead)`,
           );
+        } else if (usePrefixFirst) {
+          // AOT extensions (table/form/enum/edt), prefix-first: {Base}.{ModelToken} —
+          // bare model name, exactly what Visual Studio generates. Model token, not prefix.
+          const dotToken = modelToken || (prefix || '').replace(/_+$/, '');
+          const expectedPattern = `${baseObjectName}.${dotToken}`;
+          if (!name.includes('.')) {
+            errors.push(`${args.objectType} names must use dot notation: {Base}.{ModelName}.\n  Expected: ${expectedPattern}`);
+            if (dotToken) suggestions.push(`Correct name: ${expectedPattern}`);
+          } else {
+            const [basePart, extPart] = name.split('.', 2);
+            if (basePart !== baseObjectName) {
+              errors.push(`Extension base (before '.') must exactly match baseObjectName.\n  Expected: ${baseObjectName}.xxx\n  Got: ${basePart}.xxx`);
+            }
+            if (dotToken && extPart.toLowerCase() !== dotToken.toLowerCase()) {
+              warnings.push(`Extension token (after '.') should be the model name "${dotToken}" (EXTENSION_NAMING_STYLE=prefix-first, matching Visual Studio).\n  Current: ${extPart}\n  Recommended: ${dotToken}`);
+            }
+          }
         } else if (useModelName) {
           // AOT extensions (table/form/enum/edt), model-name style: {Base}.{ModelToken} — bare
           // model token, no "Extension" word.

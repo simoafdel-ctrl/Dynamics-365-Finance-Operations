@@ -119,3 +119,49 @@ describe('isExtensionObjectType', () => {
     expect(isExtensionObjectType('class')).toBe(false);
   });
 });
+
+describe('normalizeObjectName — prefix-first style (team convention: prefix leads)', () => {
+  beforeEach(() => {
+    process.env.EXTENSION_PREFIX = 'CPG_';
+    process.env.EXTENSION_PREFIX_SOURCE = 'config';
+    process.env.EXTENSION_NAMING_STYLE = 'prefix-first';
+    registerCustomModel('CPG');
+  });
+  it('CoC class {Prefix}_{Base}_Extension from bare base', () => {
+    expect(normalizeObjectName('SalesFormLetter', 'class-extension', 'CPG')).toBe('CPG_SalesFormLetter_Extension');
+  });
+  it('CoC class idempotent', () => {
+    expect(normalizeObjectName('CPG_SalesFormLetter_Extension', 'class-extension', 'CPG')).toBe('CPG_SalesFormLetter_Extension');
+  });
+  it('no double prefix when full team name passed', () => {
+    expect(normalizeObjectName('CPG_InventTable_Extension', 'class-extension', 'CPG')).toBe('CPG_InventTable_Extension');
+  });
+  it('AOT extension Base.{Model}, bare', () => {
+    expect(normalizeObjectName('SalesLine', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
+  });
+  it('AOT extension idempotent + migrates stale CPGExtension', () => {
+    expect(normalizeObjectName('SalesLine.CPG', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
+    expect(normalizeObjectName('SalesLine.CPGExtension', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
+  });
+  it('new objects prefixed at front', () => {
+    expect(normalizeObjectName('PvCostTypes', 'form', 'CPG')).toBe('CPG_PvCostTypes');
+  });
+});
+
+describe('normalizeObjectName — prefix-first where prefix != model (RAJA)', () => {
+  beforeEach(() => {
+    process.env.EXTENSION_PREFIX = 'RAJ_';
+    process.env.EXTENSION_PREFIX_SOURCE = 'config';
+    process.env.EXTENSION_NAMING_STYLE = 'prefix-first';
+    registerCustomModel('Raja');
+  });
+  it('CoC class takes prefix RAJ_', () => {
+    expect(normalizeObjectName('SalesFormLetter', 'class-extension', 'Raja')).toBe('RAJ_SalesFormLetter_Extension');
+  });
+  it('dot-notation takes model Raja (VS behavior)', () => {
+    expect(normalizeObjectName('SalesLine', 'table-extension', 'Raja')).toBe('SalesLine.Raja');
+  });
+  it('new object takes prefix RAJ_', () => {
+    expect(normalizeObjectName('CostSetup', 'form', 'Raja')).toBe('RAJ_CostSetup');
+  });
+});

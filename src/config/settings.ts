@@ -358,6 +358,7 @@ export const SETTINGS: Setting[] = [
     choices: [
       { value: 'prefix', hint: 'CustTable.CrExtension — embeds the extension prefix' },
       { value: 'model-name', hint: 'CustTable.ContosoRobotics — embeds the model name (VS default)' },
+      { value: 'prefix-first', hint: 'CustTable.Model + Cr_CustTable_Extension — prefix leads on classes' },
     ],
   },
 

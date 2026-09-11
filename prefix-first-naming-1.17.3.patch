@@ -1,0 +1,203 @@
+diff --git a/src/config/settings.ts b/src/config/settings.ts
+index d42e932..318f5d9 100644
+--- a/src/config/settings.ts
++++ b/src/config/settings.ts
+@@ -358,6 +358,7 @@ export const SETTINGS: Setting[] = [
+     choices: [
+       { value: 'prefix', hint: 'CustTable.CrExtension — embeds the extension prefix' },
+       { value: 'model-name', hint: 'CustTable.ContosoRobotics — embeds the model name (VS default)' },
++      { value: 'prefix-first', hint: 'CustTable.Model + Cr_CustTable_Extension — prefix leads on classes' },
+     ],
+   },
+ 
+diff --git a/src/utils/modelClassifier.ts b/src/utils/modelClassifier.ts
+index 2517df6..98d4e75 100644
+--- a/src/utils/modelClassifier.ts
++++ b/src/utils/modelClassifier.ts
+@@ -91,10 +91,11 @@ export function getObjectSuffix(): string {
+  * Configured via EXTENSION_NAMING_STYLE. Any value other than 'model-name'
+  * (including unset) resolves to 'prefix' so existing setups are unchanged.
+  */
+-export function getExtensionNamingStyle(): 'prefix' | 'model-name' {
+-  return process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase() === 'model-name'
+-    ? 'model-name'
+-    : 'prefix';
++export function getExtensionNamingStyle(): 'prefix' | 'model-name' | 'prefix-first' {
++  const raw = process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase();
++  if (raw === 'model-name') return 'model-name';
++  if (raw === 'prefix-first') return 'prefix-first';
++  return 'prefix';
+ }
+ 
+ /**
+@@ -268,7 +269,13 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
+ 
+   // model-name style embeds the model name instead of the prefix infix for extension
+   // elements/classes only (VS default); regular new objects are unaffected.
+-  const useModelName = !!modelName && getExtensionNamingStyle() === 'model-name';
++  const namingStyle = getExtensionNamingStyle();
++  const useModelName = !!modelName && namingStyle === 'model-name';
++  // prefix-first: CoC classes are {Prefix}_{Base}_Extension and AOT extensions are
++  // {Base}.{ModelToken} (bare, what VS generates). The front token is the resolved
++  // prefix without a trailing underscore ("CPG_" -> "CPG").
++  const usePrefixFirst = namingStyle === 'prefix-first';
++  const prefixFirstToken = prefix.replace(/_+$/, '');
+ 
+   // The model name as it may appear inside an object name — identical to modelName
+   // unless the name carries characters an AOT identifier cannot (see #892).
+@@ -301,6 +308,14 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
+       return `${basePart}.${modelToken}`;
+     }
+ 
++    // prefix-first: Base.{ModelToken} — bare model name, exactly what Visual Studio
++    // generates for a dot-notation extension. Deliberately the model token, NOT the
++    // object prefix: a client may have model "Raja" but prefix "RAJ_", giving
++    // SalesLine.Raja here and RAJ_x_Extension for CoC classes. Idempotent.
++    if (usePrefixFirst) {
++      return `${basePart}.${modelToken || prefixFirstToken}`;
++    }
++
+     if (suffixPart.toLowerCase().endsWith('extension')) {
+       // Always normalize casing (e.g. "CTSOExtension" → "CtsoExtension").
+       const correctSuffix = `${extensionInfix}Extension`;
+@@ -316,6 +331,27 @@ export function applyObjectPrefix(objectName: string, prefix: string, modelName?
+   if (objectName.endsWith('_Extension')) {
+     const baseName = objectName.slice(0, -'_Extension'.length);
+ 
++    // prefix-first: {Prefix}_Base_Extension — prefix at the FRONT. Idempotent:
++    // strip a prefix token already at the front (any case, with or without the
++    // trailing underscore) before re-applying, so "CPG_InventTable" never becomes
++    // "CPG_InventTableCPG_Extension" and re-running a correct name is a no-op.
++    if (usePrefixFirst) {
++      let cleanBase = baseName;
++      const lowerTok = prefixFirstToken.toLowerCase();
++      if (cleanBase.toLowerCase().startsWith(lowerTok + '_')) {
++        cleanBase = cleanBase.slice(prefixFirstToken.length + 1);
++      } else if (cleanBase.toLowerCase().startsWith(lowerTok)) {
++        cleanBase = cleanBase.slice(prefixFirstToken.length);
++      }
++      cleanBase = cleanBase.replace(/^_+/, '');
++      // Also strip a trailing infix-style token ("InventTableCPG") left by the old
++      // 'prefix' style, so switching styles on an existing name is clean.
++      if (cleanBase.toLowerCase().endsWith(lowerTok)) {
++        cleanBase = cleanBase.slice(0, cleanBase.length - prefixFirstToken.length).replace(/_+$/, '');
++      }
++      return `${prefixFirstToken}_${cleanBase}_Extension`;
++    }
++
+     // Strip any trailing model-name token first so re-running stays idempotent
+     // (avoids Base_ModelName_ModelName_Extension).
+     if (useModelName) {
+diff --git a/src/utils/objectNamingRules.ts b/src/utils/objectNamingRules.ts
+index d8f3b2b..1a6e165 100644
+--- a/src/utils/objectNamingRules.ts
++++ b/src/utils/objectNamingRules.ts
+@@ -207,6 +207,8 @@ export async function checkObjectNaming(
+       modelWritesLandIn(configManager.getWriteAnchorModel() ?? activeModel, activeModel) ||
+       '';
+     const useModelName = namingStyle === 'model-name' && !!modelName;
++    // prefix-first: CoC classes {Prefix}_{Base}_Extension; AOT extensions {Base}.{ModelToken}.
++    const usePrefixFirst = namingStyle === 'prefix-first';
+     // The spelling of the model name that may appear INSIDE an object name — what the
+     // write path embeds (applyObjectPrefix → normalizeModelToken, #892). Comparing the
+     // raw name instead flagged the very name d365fo_file(create) writes and recommended
+@@ -263,7 +265,20 @@ export async function checkObjectNaming(
+           `validate_object_naming(objectType="${args.objectType}", proposedName="${name}", baseObjectName="<base>").`,
+         );
+       } else {
+-        if (args.objectType === 'class-extension') {
++        if (args.objectType === 'class-extension' && usePrefixFirst) {
++          // prefix-first: {Prefix}_{Base}_Extension — prefix at the FRONT.
++          const frontToken = (prefix || '').replace(/_+$/, '');
++          const expectedPattern = `${frontToken}_${baseObjectName}_Extension`;
++          if (!name.endsWith('_Extension')) {
++            errors.push(`Class extension names must end with '_Extension'.\n  Expected format: ${expectedPattern}`);
++            if (frontToken) suggestions.push(`Correct name: ${expectedPattern}`);
++          } else if (frontToken && !name.toLowerCase().startsWith(`${frontToken.toLowerCase()}_`)) {
++            warnings.push(`Class extension name does not start with the prefix "${frontToken}_" (EXTENSION_NAMING_STYLE=prefix-first).\n  Current: ${name}\n  Recommended: ${expectedPattern}`);
++          } else if (!name.includes(baseObjectName)) {
++            warnings.push(`Class extension name does not embed the base class "${baseObjectName}".\n  Current: ${name}\n  Recommended: ${expectedPattern}`);
++          }
++          suggestions.push(`AOT name for an element extension instead: ${baseObjectName}.${modelToken || frontToken}`);
++        } else if (args.objectType === 'class-extension') {
+           // prefix style → {Base}{Prefix}_Extension; model-name style → {Base}_{ModelToken}_Extension
+           const expectedPattern = useModelName
+             ? `${baseObjectName}_${modelToken}_Extension`
+@@ -300,6 +315,23 @@ export async function checkObjectNaming(
+               ? `AOT name for an element extension instead: ${baseObjectName}.${modelToken}`
+               : `AOT label for extension file: ${baseObjectName}.${extensionInfix}Extension (if creating table-extension AOT object instead)`,
+           );
++        } else if (usePrefixFirst) {
++          // AOT extensions (table/form/enum/edt), prefix-first: {Base}.{ModelToken} —
++          // bare model name, exactly what Visual Studio generates. Model token, not prefix.
++          const dotToken = modelToken || (prefix || '').replace(/_+$/, '');
++          const expectedPattern = `${baseObjectName}.${dotToken}`;
++          if (!name.includes('.')) {
++            errors.push(`${args.objectType} names must use dot notation: {Base}.{ModelName}.\n  Expected: ${expectedPattern}`);
++            if (dotToken) suggestions.push(`Correct name: ${expectedPattern}`);
++          } else {
++            const [basePart, extPart] = name.split('.', 2);
++            if (basePart !== baseObjectName) {
++              errors.push(`Extension base (before '.') must exactly match baseObjectName.\n  Expected: ${baseObjectName}.xxx\n  Got: ${basePart}.xxx`);
++            }
++            if (dotToken && extPart.toLowerCase() !== dotToken.toLowerCase()) {
++              warnings.push(`Extension token (after '.') should be the model name "${dotToken}" (EXTENSION_NAMING_STYLE=prefix-first, matching Visual Studio).\n  Current: ${extPart}\n  Recommended: ${dotToken}`);
++            }
++          }
+         } else if (useModelName) {
+           // AOT extensions (table/form/enum/edt), model-name style: {Base}.{ModelToken} — bare
+           // model token, no "Extension" word.
+diff --git a/tests/utils/objectNaming.test.ts b/tests/utils/objectNaming.test.ts
+index b9b86fc..600cd10 100644
+--- a/tests/utils/objectNaming.test.ts
++++ b/tests/utils/objectNaming.test.ts
+@@ -119,3 +119,49 @@ describe('isExtensionObjectType', () => {
+     expect(isExtensionObjectType('class')).toBe(false);
+   });
+ });
++
++describe('normalizeObjectName — prefix-first style (team convention: prefix leads)', () => {
++  beforeEach(() => {
++    process.env.EXTENSION_PREFIX = 'CPG_';
++    process.env.EXTENSION_PREFIX_SOURCE = 'config';
++    process.env.EXTENSION_NAMING_STYLE = 'prefix-first';
++    registerCustomModel('CPG');
++  });
++  it('CoC class {Prefix}_{Base}_Extension from bare base', () => {
++    expect(normalizeObjectName('SalesFormLetter', 'class-extension', 'CPG')).toBe('CPG_SalesFormLetter_Extension');
++  });
++  it('CoC class idempotent', () => {
++    expect(normalizeObjectName('CPG_SalesFormLetter_Extension', 'class-extension', 'CPG')).toBe('CPG_SalesFormLetter_Extension');
++  });
++  it('no double prefix when full team name passed', () => {
++    expect(normalizeObjectName('CPG_InventTable_Extension', 'class-extension', 'CPG')).toBe('CPG_InventTable_Extension');
++  });
++  it('AOT extension Base.{Model}, bare', () => {
++    expect(normalizeObjectName('SalesLine', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
++  });
++  it('AOT extension idempotent + migrates stale CPGExtension', () => {
++    expect(normalizeObjectName('SalesLine.CPG', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
++    expect(normalizeObjectName('SalesLine.CPGExtension', 'table-extension', 'CPG')).toBe('SalesLine.CPG');
++  });
++  it('new objects prefixed at front', () => {
++    expect(normalizeObjectName('PvCostTypes', 'form', 'CPG')).toBe('CPG_PvCostTypes');
++  });
++});
++
++describe('normalizeObjectName — prefix-first where prefix != model (RAJA)', () => {
++  beforeEach(() => {
++    process.env.EXTENSION_PREFIX = 'RAJ_';
++    process.env.EXTENSION_PREFIX_SOURCE = 'config';
++    process.env.EXTENSION_NAMING_STYLE = 'prefix-first';
++    registerCustomModel('Raja');
++  });
++  it('CoC class takes prefix RAJ_', () => {
++    expect(normalizeObjectName('SalesFormLetter', 'class-extension', 'Raja')).toBe('RAJ_SalesFormLetter_Extension');
++  });
++  it('dot-notation takes model Raja (VS behavior)', () => {
++    expect(normalizeObjectName('SalesLine', 'table-extension', 'Raja')).toBe('SalesLine.Raja');
++  });
++  it('new object takes prefix RAJ_', () => {
++    expect(normalizeObjectName('CostSetup', 'form', 'Raja')).toBe('RAJ_CostSetup');
++  });
++});
