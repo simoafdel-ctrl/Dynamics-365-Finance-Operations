@@ -1,34 +1,88 @@
-# Onboarding — D365FO MCP server on your dev VM
+# Installing on a new dev VM — step by step
 
-This gets an AI assistant (Claude Code and/or GitHub Copilot in Visual Studio) working on
-your D365FO dev VM with our team conventions already applied: naming, mandatory best-practice
-checks, XML documentation, label languages.
+Follow this top to bottom on a fresh D365FO development VM. At the end, Claude Code and GitHub
+Copilot both drive the patched MCP server with our team conventions already applied: naming,
+mandatory best-practice checks, English XML documentation, the right label languages.
 
-Budget about 20 minutes, most of it waiting on `npm install` and the first metadata index.
+Budget **20–30 minutes**, most of it waiting on `npm install`.
 
-Placeholders used below: `ABC_` is an object prefix, `ABC` a model name, `K:\` the drive
-holding the AOS. Substitute what the installer detects on your own machine.
-
----
-
-## Before you start
-
-| Requirement | Check | If missing |
-|---|---|---|
-| Windows D365FO dev VM, **traditional** environment (a local `AosService\PackagesLocalDirectory`) | the folder exists on some drive | UDE is not supported yet — see [ARCHITECTURE.md](ARCHITECTURE.md#scope-traditional-only) |
-| **Node.js 24+** | `node --version` | `winget install OpenJS.NodeJS.LTS`, then **reopen PowerShell** |
-| **Git** | `git --version` | `winget install Git.Git`, then **reopen PowerShell** |
-| A custom model exists in the environment | Visual Studio > Dynamics 365 > Model management | create it first, the installer needs somewhere to write |
-| Visual Studio closed | — | the installer does not need it, but you will restart it at the end anyway |
-
-Reopening PowerShell after installing Node or Git is not optional: the current session has a
-stale `PATH` and the installer will not see the new tool.
+Placeholders used throughout: `ABC_` is an object prefix, `ABC` a model name, `K:\` the drive
+holding the AOS. Substitute what your own machine reports — the installer detects them and
+prints them back to you.
 
 ---
 
-## Install
+## Before you start — 5 minutes
 
-One command in PowerShell:
+Run these four commands in PowerShell and note what you get:
+
+```powershell
+node --version                                      # want v24 or higher
+git --version                                       # any recent version
+Get-ChildItem C:\,D:\,J:\,K:\ -Filter AosService -ErrorAction SilentlyContinue   # find the AOS drive
+$PSVersionTable.PSVersion                           # 5.1 or 7.x, both fine
+```
+
+| Requirement | Why it matters |
+|---|---|
+| **Node.js 24+** | the server declares `node >= 24.0.0`; older versions fail the build, not the install |
+| **Git** | used to clone the fork |
+| **A traditional environment** — a local `AosService\PackagesLocalDirectory` | UDE is not supported yet, see [ARCHITECTURE.md](ARCHITECTURE.md#scope-traditional-only) |
+| **A custom model already created** | the server needs somewhere to write; create it in Visual Studio first if absent |
+| **Admin rights** | only if you still need to install Node or Git |
+
+Nothing else. You do **not** need Visual Studio open, and you do not need the AOS running.
+
+---
+
+## Step 1 — Install Node.js and Git, if missing
+
+Skip if both commands above answered.
+
+```powershell
+winget install OpenJS.NodeJS.LTS
+winget install Git.Git
+```
+
+On a Windows Server VM without winget, take the installers from [nodejs.org](https://nodejs.org)
+and [git-scm.com](https://git-scm.com/download/win).
+
+> **Close and reopen PowerShell afterwards.** This is not optional and it is the single most
+> common way this install goes wrong: your current session still holds the old `PATH`, so
+> `node` or `git` will not be found even though they are installed. Reopen, re-run
+> `node --version`, and only continue once it answers.
+
+---
+
+## Step 2 — Confirm the environment is supported
+
+```powershell
+# the packages path must contain the platform bin with the metadata assembly
+Test-Path 'K:\AosService\PackagesLocalDirectory\bin\Microsoft.Dynamics.AX.Metadata.dll'
+```
+
+`True` means you have a traditional environment and the C# bridge will be able to start. If it
+is `False` on every drive, stop here: either the path is elsewhere (find it with the
+`Get-ChildItem` above) or this is a UDE, which this installer refuses on purpose rather than
+configuring from a guess.
+
+Then look at which custom models exist — you will recognise the one you are meant to work in:
+
+```powershell
+Get-ChildItem 'K:\AosService\PackagesLocalDirectory' -Directory |
+  Where-Object { Test-Path "$($_.FullName)\Descriptor" } |
+  ForEach-Object { Get-ChildItem "$($_.FullName)\Descriptor\*.xml" } |
+  ForEach-Object { $x=[xml](Get-Content $_.FullName); if ($x.AxModelInfo.Publisher -notmatch 'Microsoft') { "$($x.AxModelInfo.Name)  ($($x.AxModelInfo.Publisher))" } }
+```
+
+You do not have to write the model down — the installer detects it. This is just so the value it
+proposes does not surprise you. If several appear, it will ask you to pick.
+
+---
+
+## Step 3 — Run the installer
+
+One command:
 
 ```powershell
 irm https://raw.githubusercontent.com/simoafdel-ctrl/Dynamics-365-Finance-Operations/main/team/bootstrap.ps1 | iex
@@ -36,126 +90,264 @@ irm https://raw.githubusercontent.com/simoafdel-ctrl/Dynamics-365-Finance-Operat
 
 It clones the patched server to `C:\d365fo-mcp-patched`, builds it, then runs the installer.
 
-Already have the clone? Run the installer directly:
+To clone somewhere else, set the folder first — keep it **short**, Windows caps paths at 260
+characters and this repository has deep ones:
 
 ```powershell
+$env:D365FO_MCP_DIR = 'D:\tools\d365fo-mcp'
+irm https://raw.githubusercontent.com/simoafdel-ctrl/Dynamics-365-Finance-Operations/main/team/bootstrap.ps1 | iex
+```
+
+What you should see first:
+
+```
+=== 1. Prerequisites
+  +  Git 2.49.1.windows.1
+  +  Node.js v24.20.0
+
+=== 2. Patched MCP server
+  -> cloning https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.git
+  +  server sources in C:\d365fo-mcp-patched
+
+=== 3. Handing over to the installer
+```
+
+Then `npm install` runs — **several minutes, with no output for long stretches.** That is normal
+on a first install. Do not interrupt it.
+
+### If the one-liner cannot run
+
+Some machines block `irm | iex` by execution policy. Clone and run the script directly:
+
+```powershell
+git -c core.longpaths=true clone https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.git C:\d365fo-mcp-patched
 C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
 ```
 
-### What it asks you — three questions, nothing else
+If PowerShell refuses to run the script at all:
 
-Everything else is detected: the packages path, the model, the bridge binary, the available
-label languages, the installation folders.
-
-| Question | What to answer |
-|---|---|
-| **Object prefix** | Your team prefix for this client, e.g. `ABC_`. The trailing underscore is optional. Defaults to the model name. |
-| **Label languages** | Primary first, comma separated, e.g. `en-US,fr-CA`. Validated against the languages actually present in the metadata, so a wrong locale (`FR` instead of `fr-CA`) is refused rather than written. |
-| **Projects folder** | Where you keep your D365FO solutions. The detected value is offered; any drive is fine. |
-
-### What it writes
-
-| File | Why |
-|---|---|
-| `%LOCALAPPDATA%\d365fo-mcp\installation\config\d365fo-mcp.json` | server configuration: environment, model, naming, labels, bridge |
-| `%USERPROFILE%\.mcp.json` | client configuration — Visual Studio / Copilot reads this one |
-| `<projects folder>\.mcp.json` | same content — Claude Code reads the one next to your work |
-| `<projects folder>\CLAUDE.md` | the rules Claude Code follows, rendered with your prefix/model/languages |
-| `<projects folder>\.github\copilot-instructions.md` | the same rules for Copilot in Visual Studio |
-
-Any file that already existed is backed up as `<name>.bak-<timestamp>` before being replaced.
-Re-running the installer is safe.
-
-The installer finishes with a file-by-file report, `[ OK ]` or `[FAIL]` per line, plus two
-functional tests: the naming convention run against the compiled server, and the C# metadata
-bridge starting against your packages path. **All lines must read `[ OK ]`.** If any says
-`[FAIL]`, go to [TROUBLESHOOTING.md](TROUBLESHOOTING.md) — the failing line names the problem.
+```powershell
+powershell -ExecutionPolicy Bypass -File C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
+```
 
 ---
 
-## Finish, once each
+## Step 4 — Answer the three questions
 
-### 1. Claude Code
+Everything else is detected: the packages path, the model, the bridge binary, the available
+label languages, the install folders. You will see the detected values scroll past first:
+
+```
+=== 2. D365FO environment
+  +  packages path  K:\AosService\PackagesLocalDirectory
+  +  model          ABC
+  +  bridge         C:\Users\you\AppData\Local\d365fo-mcp\installation\bridge\D365MetadataBridge.exe
+  +  74 label languages available in the metadata
+```
+
+Check that `model` is the one you expect **before** answering. Then:
+
+| Question | How to answer |
+|---|---|
+| **Object prefix** | The team prefix for this client, e.g. `ABC_`. Trailing underscore optional — it is normalised either way. The default offered is the model name; accept it only if your prefix really is the model name. |
+| **Label languages** | Primary first, comma separated: `en-US,fr-CA`. Validated against the languages actually present in the metadata, so a wrong locale is refused and near matches suggested. Ask the project lead if unsure — this ends up in every label you create. |
+| **Projects folder** | Where you keep your D365FO solutions. The detected value is offered. Any drive is fine, including one other than `C:`. |
+
+Press Enter to accept a default. If several custom models exist, a numbered list appears before
+these questions — pick the one you work in.
+
+---
+
+## Step 5 — Read the report
+
+The install ends with a verdict, one line per check:
+
+```
+=== Report
+  [ OK ] naming: CoC class extension
+  [ OK ] naming: dot-notation extension
+  [ OK ] bridge starts against the packages path
+  [ OK ] server entry point  dist\index.js
+  [ OK ] metadata bridge     D365MetadataBridge.exe
+  [ OK ] server config       d365fo-mcp.json
+  [ OK ] client config       you\.mcp.json
+  [ OK ] client config       repos\.mcp.json
+  [ OK ] Claude Code         CLAUDE.md
+  [ OK ] Copilot             copilot-instructions.md
+
+  Environment
+    model      : ABC
+    prefix     : ABC_
+    naming     : ABC_CustTable_Extension  |  CustTable.ABC
+```
+
+**Every line must read `[ OK ]`.** These are not cosmetic — the first two run the naming
+convention against the freshly compiled code, and the third starts the real bridge binary
+against your real packages path.
+
+| Line | What it means if it fails |
+|---|---|
+| `naming: …` | the convention is not active, or `dist` was not rebuilt — [see the naming section](TROUBLESHOOTING.md#the-naming-convention-is-not-applied) |
+| `bridge starts …` | wrong packages path; the bridge needs the folder **containing** `bin\Microsoft.Dynamics.AX.Metadata.dll` — [see the bridge section](TROUBLESHOOTING.md#writes-fail-c-metadata-bridge-is-not-available) |
+| `client config …` | the `.mcp.json` is missing a key, or points at the unpatched npm package |
+| any file line | that file did not land; the detail line under it gives the path |
+
+Do not continue past a `[FAIL]`. The failing line names the section of
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md) you need.
+
+Everything the installer replaced was backed up first as `<name>.bak-<timestamp>`, so a re-run is
+always safe.
+
+---
+
+## Step 6 — Connect the two clients
+
+### Claude Code
 
 ```powershell
 cd <your projects folder>
 claude
 ```
 
-Claude Code shows the local MCP server as **Pending approval** the first time — approve it.
-Then check it is live:
+The first time, Claude Code shows the local MCP server as **Pending approval** — approve it.
+This happens once per machine.
 
-> ask Claude: *call get_workspace_info*
+Then verify it is really live. Ask Claude:
 
-You want to see your `Model`, your `Prefix`, and `Env: traditional`. If the call fails, the
-server is not connected; if the answer starts with a configuration problem, read it — it says
-what is wrong.
+> *call get_workspace_info*
 
-### 2. Visual Studio / Copilot
+You want to see your `Model`, your `Prefix`, and `Env: traditional`. If the call fails the server
+is not connected; if the answer opens with a configuration problem, read it — it states what is
+wrong.
 
-Restart Visual Studio so Copilot rereads `%USERPROFILE%\.mcp.json`. Then, in Copilot Chat,
-ask it to call `get_workspace_info` too.
+### Visual Studio / Copilot
 
-### 3. Prove the naming convention on something disposable
+Restart Visual Studio so Copilot rereads `%USERPROFILE%\.mcp.json`, then ask Copilot Chat the
+same thing.
 
-This is the one check nobody should skip, and the reason is in
-[ARCHITECTURE.md](ARCHITECTURE.md#why-we-verify-on-disk): an assistant sometimes *describes*
-the old naming style from memory while the server produces the correct one. Only the file on
-disk is authoritative.
+> Ignore the help paragraph of `get_workspace_info` if it describes an older naming style. That
+> text is upstream prose the patch does not rewrite. It is cosmetic — **the setting line is what
+> counts, and Step 7 is what proves it.**
 
-Ask the assistant to create a class extension on a table you do not care about, then look at
-what actually landed:
+---
+
+## Step 7 — Prove the convention on disk
+
+**Do not skip this.** It is the only step that proves the install rather than describing it. Two
+different AI clients have reported the wrong extension name while the server was producing the
+right one — an assistant describes what it expects, which is not always what happened.
+
+Ask the assistant to create a CoC class extension on a table you do not care about, say
+`CustTable`. Then look at what actually landed:
 
 ```powershell
-Get-ChildItem 'K:\AosService\PackagesLocalDirectory\ABC\ABC' -Recurse -Filter '*CustTable*Extension*'
+Get-ChildItem 'K:\AosService\PackagesLocalDirectory\ABC\ABC' -Recurse -Filter '*CustTable*Extension*' |
+  Select-Object Name, LastWriteTime
 ```
 
-Expected, with prefix `ABC_` and model `ABC`:
-
-| You asked for | File on disk |
+| You asked for | Correct file on disk |
 |---|---|
 | a CoC class extension of `CustTable` | `ABC_CustTable_Extension.xml` |
 | a table extension of `CustTable` | `CustTable.ABC.xml` |
 
-Anything else — in particular a doubled `ABC_CustTableABC_Extension` — means the naming style
-is not active. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-naming-convention-is-not-applied).
+A doubled `ABC_CustTableABC_Extension` means the naming style is not active — go to
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-naming-convention-is-not-applied).
 
-Delete the throwaway object afterwards.
+Delete the throwaway object once you have looked.
+
+> Note: prefix and model are independent by design. A site with model `Abcco` and prefix `ABC_`
+> correctly yields `ABC_CustTable_Extension` **and** `CustTable.Abcco`. That is not a bug.
 
 ---
 
-## How to work with it, in one page
+## Step 8 — Before your first real task
 
-Read [CONVENTIONS.md](CONVENTIONS.md) once — it is the short version of what the assistant is
-now instructed to do, and what you should expect from it:
+Read [CONVENTIONS.md](CONVENTIONS.md) once. It is the short version of what the assistant is now
+instructed to do, and what you should hold it to:
 
-- Naming is produced by the server. Ask for `SalesLine`, not `ABC_SalesLine_Extension`.
-- Best practices are **verified by running the checker**, never asserted from reading code.
-  If an assistant tells you an object "respects best practices" without having run
-  `validate_code` and `xppbp`, do not believe it.
-- AOT objects (`.xml`, `.xpp`) are written through the MCP tools only. A text edit on AOT XML
-  corrupts the metadata model.
-- Writes apply immediately, with no preview. The assistant must describe the change and wait
-  for your "ok" — and it can revert with `d365fo_file(action="undo")`.
-- Builds are yours to trigger. The assistant never compiles on its own, because that blocks
-  your VM.
+- **Naming is produced by the server.** Ask for `SalesLine`, not `ABC_SalesLine_Extension`.
+- **Best practices are verified, never asserted.** If an assistant says an object "respects best
+  practices" without having run `validate_code` and `xppbp`, do not believe it — ask for the
+  check.
+- **AOT objects go through the MCP tools only.** A text edit on `.xml`/`.xpp` corrupts the
+  metadata model.
+- **Writes apply immediately, with no preview.** The assistant describes the change and waits for
+  your "ok"; `d365fo_file(action="undo")` reverts.
+- **Builds are yours to trigger.** The assistant never compiles on its own — it would block your
+  VM.
 
-## Keeping up to date
+---
+
+## If something goes wrong
+
+1. Re-run the audit. It re-detects everything, runs both functional tests, and **writes nothing**:
+
+   ```powershell
+   C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 -DryRun
+   ```
+
+2. Take the failing line to [TROUBLESHOOTING.md](TROUBLESHOOTING.md). Every entry there is a
+   failure hit on a real VM, listed under its literal symptom.
+
+3. Two shortcuts worth knowing by heart:
+   - **Writes suddenly fail after a VM restart** with `C# metadata bridge is not available` →
+     it is the packages path, not the bridge binary. Check `D365FO_CUSTOM_PACKAGES_PATH` equals
+     `D365FO_PACKAGE_PATH` in `.mcp.json`.
+   - **`Filename too long` during the clone** → the target folder is too deep. Use
+     `C:\d365fo-mcp-patched`.
+
+---
+
+## What gets installed where
+
+| Path | What |
+|---|---|
+| `C:\d365fo-mcp-patched` | the patched server; `dist\index.js` is what the clients execute |
+| `%LOCALAPPDATA%\d365fo-mcp\installation\config\d365fo-mcp.json` | server configuration |
+| `%LOCALAPPDATA%\d365fo-mcp\installation\bridge\` | the C# metadata bridge |
+| `%USERPROFILE%\.mcp.json` | client configuration — Visual Studio / Copilot reads this |
+| `<projects folder>\.mcp.json` | same content — Claude Code reads the one next to your work |
+| `<projects folder>\CLAUDE.md` | rules for Claude Code, rendered with your prefix/model/languages |
+| `<projects folder>\.github\copilot-instructions.md` | the same rules for Copilot |
+
+Nothing is written to your D365FO metadata. The two `.mcp.json` are deliberate: Claude Code reads
+the one in the folder you open, Copilot reads the one in your profile, and a workspace on another
+drive never walks up to `%USERPROFILE%`.
+
+## Re-running, and staying current
 
 ```powershell
 git -C C:\d365fo-mcp-patched pull
 C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
 ```
 
-Re-running the installer is how you pick up an updated rule: the instruction files in your
-projects folder are **generated**, so edit the templates in the repo, not your local copy.
-A local edit is overwritten on the next install and never reaches your colleagues.
+This is how you pick up a changed team rule. The instruction files in your projects folder are
+**generated** — edit the templates in the repository, never your local copy. A local edit is
+overwritten on the next install and never reaches your colleagues.
 
-## Audit a machine without changing it
+## Unattended install
+
+For setting up several machines, everything can be passed in:
 
 ```powershell
-C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 -DryRun
+C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 `
+    -Prefix ABC_ -LabelLanguages en-US,fr-CA -WorkspacePath 'C:\Users\you\source\repos' -Yes
 ```
 
-Detects, validates, runs both functional tests, writes nothing. This is the right first move
-when something stops working.
+`-Yes` takes every default and asks nothing. It refuses to guess where guessing would be wrong —
+with several custom models and no `-Model`, it stops and tells you to name one.
+
+---
+
+## After a first install on a new machine
+
+This install path is verified on a traditional VM, but a few branches only ever run on a genuinely
+fresh box: the real `npm install` and build, compiling the bridge when no binary exists, the
+interactive prompts, and UDE detection. If you are among the first to run it on a new VM, send the
+team channel:
+
+- the final report block (all the `[ OK ]` / `[FAIL]` lines),
+- the file name produced in Step 7,
+- anything the installer asked that you found ambiguous.
+
+That is what turns this from *tested* into *proven*.
