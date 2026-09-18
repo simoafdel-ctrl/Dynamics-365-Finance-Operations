@@ -58,6 +58,28 @@ function Invoke-Tool([string]$Exe, [string[]]$Arguments) {
     } finally { $ErrorActionPreference = $prev }
 }
 
+function Remove-TreeSafely([string]$Dir) {
+    # Remove-Item hits the same 260-character wall as git: on a partial clone it deletes
+    # everything except the deep files, leaving a folder that blocks the next attempt.
+    # Mirroring an empty folder over it with robocopy clears it whatever the depth -
+    # robocopy speaks long paths natively.
+    if (-not (Test-Path -LiteralPath $Dir)) { return }
+    $empty = Join-Path $env:TEMP ('d365fo-mcp-empty-' + [guid]::NewGuid().ToString('N'))
+    $null = New-Item -ItemType Directory -Path $empty -Force
+    $prev = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        # robocopy returns 0-7 for success; anything reported here is swallowed on purpose,
+        # the Test-Path below is what decides.
+        & robocopy $empty $Dir /MIR /NFL /NDL /NJH /NJS /NC /NS /NP 2>&1 | Out-Null
+        Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $empty -Recurse -Force -ErrorAction SilentlyContinue
+        # robocopy signals success with codes 1-7, which would otherwise travel all the way
+        # to this script's own exit code and report a failed bootstrap.
+        $global:LASTEXITCODE = 0
+    } finally { $ErrorActionPreference = $prev }
+}
+
 function Invoke-Clone([string]$Dir) {
     # --quiet: without it, every checkout progress tick arrives as its own line through
     # the pipeline and buries the real messages under a hundred lines of percentages.
@@ -68,7 +90,7 @@ function Invoke-Clone([string]$Dir) {
         # fail in a far more confusing way. Remove it so a retry starts clean.
         if (Test-Path -LiteralPath $Dir) {
             Write-Step 'removing the incomplete clone so a retry starts clean'
-            Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+            Remove-TreeSafely $Dir
         }
         Fail 'git clone failed - see the output above.' @(
             'If the error mentions "Filename too long", choose a shorter target folder:',

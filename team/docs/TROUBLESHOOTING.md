@@ -230,6 +230,19 @@ git -c core.longpaths=true clone https://github.com/simoafdel-ctrl/Dynamics-365-
 Keep the target folder short — `C:\d365fo-mcp-patched` is the standard and leaves plenty of
 headroom. A deep folder (a nested temp or profile path) eats the budget before git starts.
 
+### Deleting such a folder also fails
+
+`Remove-Item -Recurse -Force` hits the same 260-character wall: it deletes everything except
+the deep files and leaves a folder behind that blocks the next attempt. Use robocopy, which
+speaks long paths natively — mirror an empty folder over it, then delete:
+
+```powershell
+$empty = New-Item -ItemType Directory -Path "$env:TEMP\empty-mirror" -Force
+robocopy $empty.FullName 'C:\path\to\the\broken\clone' /MIR | Out-Null
+Remove-Item 'C:\path\to\the\broken\clone' -Recurse -Force
+Remove-Item $empty -Recurse -Force
+```
+
 ## npm install or npm run build fails
 
 - **`npm` is not recognised.** Node was installed in another session. Close and reopen
