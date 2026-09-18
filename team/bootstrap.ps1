@@ -37,6 +37,12 @@ function Fail([string]$m, [string[]]$Hints) {
     Write-Host ''; exit 1
 }
 
+# The repository carries deep paths (eval/goldens/... with long file names). Windows caps
+# a path at 260 characters, and git then fails the checkout with "Filename too long",
+# leaving a clone that looks successful but has no working tree. -c core.longpaths=true
+# makes git use the long-path API and clone correctly whatever the target folder depth.
+$GitLongPaths = @('-c', 'core.longpaths=true')
+
 function Invoke-Tool([string]$Exe, [string[]]$Arguments) {
     # git and npm write progress to stderr. Under $ErrorActionPreference='Stop',
     # PowerShell 5.1 turns any native stderr line into a terminating NativeCommandError
@@ -50,6 +56,25 @@ function Invoke-Tool([string]$Exe, [string[]]$Arguments) {
         & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host ('     ' + $_.ToString()) -ForegroundColor DarkGray }
         return $LASTEXITCODE
     } finally { $ErrorActionPreference = $prev }
+}
+
+function Invoke-Clone([string]$Dir) {
+    # --quiet: without it, every checkout progress tick arrives as its own line through
+    # the pipeline and buries the real messages under a hundred lines of percentages.
+    $rc = Invoke-Tool 'git' ($GitLongPaths + @('clone', '--quiet', $RepoUrl, $Dir))
+    if ($rc -ne 0) {
+        # A failed clone leaves a partial folder WITH a .git in it. Left in place, the next
+        # run would take the "update the existing clone" path on a broken working tree and
+        # fail in a far more confusing way. Remove it so a retry starts clean.
+        if (Test-Path -LiteralPath $Dir) {
+            Write-Step 'removing the incomplete clone so a retry starts clean'
+            Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Fail 'git clone failed - see the output above.' @(
+            'If the error mentions "Filename too long", choose a shorter target folder:',
+            "  `$env:D365FO_MCP_DIR = 'C:\d365fo-mcp-patched'   then run the command again."
+        )
+    }
 }
 
 Write-Host ''
@@ -98,7 +123,7 @@ if (Test-Path -LiteralPath (Join-Path $TargetDir '.git')) {
         } catch { }
         $ErrorActionPreference = $prevEap
         Write-Step "updating the existing clone (origin/$branch)"
-        $rc = Invoke-Tool 'git' @('pull', '--ff-only', 'origin', $branch)
+        $rc = Invoke-Tool 'git' ($GitLongPaths + @('pull', '--ff-only', '--quiet', 'origin', $branch))
         if ($rc -ne 0) {
             Fail "git pull could not fast-forward $branch from origin." @(
                 'The clone has local commits, uncommitted changes, or has diverged from origin.',
@@ -114,12 +139,10 @@ if (Test-Path -LiteralPath (Join-Path $TargetDir '.git')) {
         )
     }
     Write-Step "cloning into the existing empty folder $TargetDir"
-    $rc = Invoke-Tool 'git' @('clone', $RepoUrl, $TargetDir)
-    if ($rc -ne 0) { Fail 'git clone failed - see the output above.' }
+    Invoke-Clone $TargetDir
 } else {
-    Write-Step "cloning $RepoUrl"
-    $rc = Invoke-Tool 'git' @('clone', $RepoUrl, $TargetDir)
-    if ($rc -ne 0) { Fail 'git clone failed - see the output above.' }
+    Write-Step "cloning $RepoUrl (takes under a minute)"
+    Invoke-Clone $TargetDir
 }
 Write-Ok "server sources in $TargetDir"
 

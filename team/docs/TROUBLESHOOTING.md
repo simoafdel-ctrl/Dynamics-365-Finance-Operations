@@ -205,6 +205,31 @@ only, check that your instruction files are the generated ones and not a stale h
 
 ---
 
+## The clone fails: "Filename too long"
+
+**Symptom, during `git clone`:**
+
+```
+error: unable to create file eval/goldens/.../SomeVeryLongName.metadata.xml: Filename too long
+fatal: unable to checkout working tree
+warning: Clone succeeded, but checkout failed.
+```
+
+Windows caps a path at 260 characters and this repository carries deep paths under
+`eval/goldens/`. The clone then leaves a folder that **has a `.git` but no working tree** — it
+looks cloned and nothing works.
+
+`team/bootstrap.ps1` clones with `-c core.longpaths=true`, which uses the long-path API and
+avoids this entirely, and it deletes the incomplete folder if a clone fails so a retry starts
+clean. You only meet this by cloning by hand. If you do:
+
+```powershell
+git -c core.longpaths=true clone https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.git C:\d365fo-mcp-patched
+```
+
+Keep the target folder short — `C:\d365fo-mcp-patched` is the standard and leaves plenty of
+headroom. A deep folder (a nested temp or profile path) eats the budget before git starts.
+
 ## npm install or npm run build fails
 
 - **`npm` is not recognised.** Node was installed in another session. Close and reopen

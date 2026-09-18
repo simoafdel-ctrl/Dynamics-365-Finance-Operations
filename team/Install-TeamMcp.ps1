@@ -663,7 +663,18 @@ Render-Template (Join-Path $templateDir 'copilot-instructions.md')   (Join-Path 
 # ================================================================ 6. verification
 Write-Head '6. Verification'
 
-# (a) naming, run against the compiled code with this environment values
+# (a) naming, run against the compiled code with this environment values.
+# dist can legitimately be absent here: -DryRun and -SkipBuild both skip the build. That
+# is not a naming failure, and reporting it as one would send someone hunting the wrong
+# problem - so it is called what it is.
+$namingModulePath = Join-Path $ServerRoot 'dist\utils\objectNaming.js'
+$expectClass = "$prefixBare" + '_CustTable_Extension'
+$expectTable = "CustTable.$Model"
+if (-not (Test-Path -LiteralPath $namingModulePath)) {
+    Write-Warn 'naming test skipped: dist is not built yet (expected with -DryRun or -SkipBuild).'
+    Write-Warn 'Run the installer without those switches to build and test for real.'
+} else {
+
 $namingScript = Join-Path $env:TEMP "d365fo-mcp-naming-$($script:Stamp).mjs"
 $namingModule = ([Uri](Join-Path $ServerRoot 'dist\utils\objectNaming.js')).AbsoluteUri
 $namingCode = @"
@@ -678,13 +689,13 @@ $env:EXTENSION_PREFIX        = $prefixStored
 $env:EXTENSION_PREFIX_SOURCE = 'config'
 $namingOut = Invoke-Native 'node' @($namingScript)
 Remove-Item -LiteralPath $namingScript -Force -ErrorAction SilentlyContinue
-$expectClass = "$prefixBare" + '_CustTable_Extension'
-$expectTable = "CustTable.$Model"
 $namingLines = @($namingOut -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ })
 $namingPass = ($namingLines -contains $expectClass) -and ($namingLines -contains $expectTable)
 Add-Check 'naming: CoC class extension' ($namingLines -contains $expectClass) "expected $expectClass"
 Add-Check 'naming: dot-notation extension' ($namingLines -contains $expectTable) "expected $expectTable"
 if (-not $namingPass) { Write-Warn "naming test output was: $($namingLines -join ' | ')" }
+
+}   # end of the naming test
 
 # (b) the bridge starts against this packages path
 $bridgeOut = Invoke-Native $bridgeExe @('--packages-path', $PackagePath, '--version')
@@ -699,7 +710,14 @@ if (-not $bridgePass) {
 }
 
 # (c) every file landed, and says what it must say
-Add-Check 'server entry point  dist\index.js' (Test-Path -LiteralPath $distEntry) $distEntry
+if ((-not (Test-Path -LiteralPath $distEntry)) -and ($DryRun -or $SkipBuild)) {
+    # Same reasoning as the naming test: a missing dist under -DryRun/-SkipBuild is the
+    # switch doing its job, not a broken install. Reporting it as a failure would send
+    # someone looking for a problem that is not there.
+    Write-Warn 'dist\index.js is not built yet - a real install builds it first.'
+} else {
+    Add-Check 'server entry point  dist\index.js' (Test-Path -LiteralPath $distEntry) $distEntry
+}
 Add-Check 'metadata bridge     D365MetadataBridge.exe' (Test-Path -LiteralPath $bridgeExe) $bridgeExe
 if ($DryRun) {
     Write-Warn 'dry run: the file checks below describe what an install would have written.'
