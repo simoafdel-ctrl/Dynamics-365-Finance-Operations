@@ -58,7 +58,34 @@ change can be re-applied to a future upstream version.
 
 ## Install on a new dev VM
 
-Prerequisites: **Node.js 18+** and **Git**.
+**Use the team installer — one command, nothing to finish by hand:**
+
+```powershell
+irm https://raw.githubusercontent.com/simoafdel-ctrl/Dynamics-365-Finance-Operations/main/team/bootstrap.ps1 | iex
+```
+
+It clones this fork, builds it, detects the environment (packages path, model, bridge, label
+languages), asks at most three questions (prefix, label languages, projects folder), writes every
+configuration file to both client locations, deploys the instruction files for Claude Code and
+Copilot, and finishes with a file-by-file report plus two functional tests.
+
+> **Do not run the `install.ps1` at the root of this repository.** It is upstream's own installer
+> and it installs the package **from npm**, which does **not** carry the `prefix-first` patch —
+> naming silently falls back to the default style. Ours is `team/Install-TeamMcp.ps1`.
+
+Team documentation:
+
+| Document | For |
+|---|---|
+| [team/docs/ONBOARDING.md](team/docs/ONBOARDING.md) | a developer setting up their VM — start here |
+| [team/docs/CONVENTIONS.md](team/docs/CONVENTIONS.md) | the rules the install enforces, and what to expect from the assistant |
+| [team/docs/TROUBLESHOOTING.md](team/docs/TROUBLESHOOTING.md) | every failure we have actually hit, with its real symptom |
+| [team/docs/ARCHITECTURE.md](team/docs/ARCHITECTURE.md) | why the install is built this way — read before changing it |
+
+Prerequisites: **Node.js 24+** (`engines` in `package.json`) and **Git**. If you install either
+one, close and reopen PowerShell before running the command, so `PATH` is refreshed.
+
+### Manual build, if you need it
 
 ```powershell
 git clone https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.git C:\d365fo-mcp-patched
@@ -69,7 +96,9 @@ npm run build
 
 `npm run build` regenerates the `dist/` folder — that is what the MCP clients actually run.
 Then configure the server for the environment (below) and point the clients at
-`C:\d365fo-mcp-patched\dist\index.js`.
+`C:\d365fo-mcp-patched\dist\index.js`. The sections that follow document that configuration;
+`team/Install-TeamMcp.ps1` produces all of it for you, including the parts that are easy to get
+wrong.
 
 ---
 
@@ -107,28 +136,35 @@ server reads its config file):
       "args": ["C:\\d365fo-mcp-patched\\dist\\index.js"],
       "env": {
         "D365FO_CONFIG": "<path to d365fo-mcp.json>",
+        "D365FO_PACKAGE_PATH": "<...\\PackagesLocalDirectory>",
+        "D365FO_CUSTOM_PACKAGES_PATH": "<IDENTICAL to D365FO_PACKAGE_PATH>",
+        "D365FO_MODEL_NAME": "<MODEL>",
+        "D365FO_BRIDGE_EXE_PATH": "<...\\bridge\\D365MetadataBridge.exe>",
         "EXTENSION_NAMING_STYLE": "prefix-first",
         "EXTENSION_PREFIX": "<PREFIX_>",
         "EXTENSION_PREFIX_SOURCE": "config"
       }
     }
   },
-  "mcpServers": {
-    "d365fo-mcp-tools": {
-      "command": "node",
-      "args": ["C:\\d365fo-mcp-patched\\dist\\index.js"],
-      "env": {
-        "D365FO_CONFIG": "<path to d365fo-mcp.json>",
-        "EXTENSION_NAMING_STYLE": "prefix-first",
-        "EXTENSION_PREFIX": "<PREFIX_>",
-        "EXTENSION_PREFIX_SOURCE": "config"
-      }
-    }
-  }
+  "mcpServers": { "…identical content to the block above…" }
 }
 ```
 
 Both keys point at the same `dist\index.js`, so both clients produce the identical convention.
+
+Every variable is required, and two of them are not obvious:
+
+- **`D365FO_MODEL_NAME`** — without it the server reports `Model name: (not configured)`.
+- **`D365FO_CUSTOM_PACKAGES_PATH`, set equal to `D365FO_PACKAGE_PATH`** — this looks redundant and
+  is not. The server can resolve a custom packages path by XPP auto-detection, which after a VM
+  restart may land on the solutions folder; the C# bridge then looks for `<solutions>\bin`, fails
+  with `[FATAL] D365FO bin path not found`, and every write fails with `C# metadata bridge is not
+  available`. This variable is read first and short-circuits that detection. See
+  [team/docs/ARCHITECTURE.md](team/docs/ARCHITECTURE.md).
+
+Passing the values as environment variables rather than relying on `d365fo-mcp.json` alone is
+deliberate: launched from an arbitrary working directory, the server does not reliably apply the
+file's values (observed: `0 model(s)` with a correct `modelName` in the file).
 
 ---
 

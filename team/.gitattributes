@@ -1,0 +1,4 @@
+# The repository root sets `* text=auto eol=lf`. PowerShell handles LF fine, but these
+# scripts are run by hand on Windows dev VMs and get opened in Notepad, the ISE and VS
+# when something goes wrong - CRLF keeps them readable in all three.
+*.ps1 text eol=crlf
