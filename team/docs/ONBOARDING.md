@@ -4,7 +4,9 @@ Follow this top to bottom on a fresh D365FO development VM. At the end, Claude C
 Copilot both drive the patched MCP server with our team conventions already applied: naming,
 mandatory best-practice checks, English XML documentation, the right label languages.
 
-Budget **20–30 minutes**, most of it waiting on `npm install`.
+Budget **45–75 minutes**, nearly all of it waiting: a few minutes on `npm install`, then
+15–45 minutes while the installer indexes your AOT. Both phases print little or nothing for long
+stretches. Start it and go do something else.
 
 Placeholders used throughout: `ABC_` is an object prefix, `ABC` a model name, `K:\` the drive
 holding the AOS. Substitute what your own machine reports — the installer detects them and
@@ -29,6 +31,7 @@ $PSVersionTable.PSVersion                           # 5.1 or 7.x, both fine
 | **Git** | used to clone the fork |
 | **A traditional environment** — a local `AosService\PackagesLocalDirectory` | UDE is not supported yet, see [ARCHITECTURE.md](ARCHITECTURE.md#scope-traditional-only) |
 | **A custom model already created** | the server needs somewhere to write; create it in Visual Studio first if absent |
+| **~40 GB free** on some drive | the AOT extraction is large and short-lived; the installer puts it on the roomiest drive it can and tells you which |
 | **Admin rights** | only if you still need to install Node or Git |
 
 Nothing else. You do **not** need Visual Studio open, and you do not need the AOS running.
@@ -158,7 +161,43 @@ these questions — pick the one you work in.
 
 ---
 
-## Step 5 — Read the report
+## Step 5 — Wait out the metadata index
+
+This is the long one, it runs by itself, and it is the step that makes the assistant able to
+*find* anything. Nothing to answer — just do not close the window.
+
+```
+=== 6. Metadata index
+  -> this runs once and takes 15-45 minutes on a full AOT - leave the window open
+  -> [1/2] extracting metadata from the packages folder (XML -> JSON)
+  -> [2/2] building the symbol database (JSON -> SQLite)
+  +  index built
+```
+
+Two phases: every `.xml` in your packages folder is read out to JSON (~185 models, ~185 000
+files), then loaded into a SQLite symbol database. The second phase prints a percentage per
+model, largest first, so `Foundation` sitting at `[1%]` for a while is normal.
+
+**Nothing else may hold the database while this runs.** The build needs exclusive access, so
+close Claude Code and Visual Studio first — each one starts its own MCP server. The installer
+checks and stops with that instruction rather than starting an hour of work it cannot finish.
+
+On a re-run the installer finds the index already populated and skips straight past it. Two
+switches change that:
+
+| Switch | Effect |
+|---|---|
+| `-SkipIndex` | leave the index alone. Fast re-run when you only changed a team rule or a prefix. |
+| `-ForceIndex` | rebuild it even though it has rows. Use after a platform update or a model import. |
+| `-MetadataWorkPath <dir>` | put the extraction elsewhere. It defaults to the roomiest drive. |
+| `-IndexPath <dir>` | put the 2–3 GB index elsewhere. An override already in your config is kept, never reset. |
+
+The extraction folder is scratch space: it is only read by phase 2. You can delete it once the
+install reports `[ OK ] symbol index is populated`, and the next `-ForceIndex` will write it again.
+
+---
+
+## Step 6 — Read the report
 
 The install ends with a verdict, one line per check:
 
@@ -166,7 +205,9 @@ The install ends with a verdict, one line per check:
 === Report
   [ OK ] naming: CoC class extension
   [ OK ] naming: dot-notation extension
-  [ OK ] bridge starts against the packages path
+  [ OK ] bridge answers its ready handshake
+  [ OK ] bridge has its dependencies
+  [ OK ] symbol index is populated
   [ OK ] server entry point  dist\index.js
   [ OK ] metadata bridge     D365MetadataBridge.exe
   [ OK ] server config       d365fo-mcp.json
@@ -181,14 +222,16 @@ The install ends with a verdict, one line per check:
     naming     : ABC_CustTable_Extension  |  CustTable.ABC
 ```
 
-**Every line must read `[ OK ]`.** These are not cosmetic — the first two run the naming
-convention against the freshly compiled code, and the third starts the real bridge binary
-against your real packages path.
+**Every line must read `[ OK ]`.** These are not cosmetic — they run the naming convention
+against the freshly compiled code, start the real bridge binary against your real packages path,
+and read the symbol database back.
 
 | Line | What it means if it fails |
 |---|---|
 | `naming: …` | the convention is not active, or `dist` was not rebuilt — [see the naming section](TROUBLESHOOTING.md#the-naming-convention-is-not-applied) |
-| `bridge starts …` | wrong packages path; the bridge needs the folder **containing** `bin\Microsoft.Dynamics.AX.Metadata.dll` — [see the bridge section](TROUBLESHOOTING.md#writes-fail-c-metadata-bridge-is-not-available) |
+| `bridge answers …` | the bridge started but could not respond. Usually a wrong packages path — it needs the folder **containing** `bin\Microsoft.Dynamics.AX.Metadata.dll` — [see the bridge section](TROUBLESHOOTING.md#writes-fail-c-metadata-bridge-is-not-available) |
+| `bridge has its dependencies` | the bridge was deployed without the DLLs it loads at runtime. It would start, log success, then die on its first answer — [see the bridge section](TROUBLESHOOTING.md#the-bridge-starts-then-dies-on-its-first-request) |
+| `symbol index is populated` | the index is empty, so every search will come back empty — [see the index section](TROUBLESHOOTING.md#every-search-returns-nothing-and-even-standard-objects-are-not-found) |
 | `client config …` | the `.mcp.json` is missing a key, or points at the unpatched npm package |
 | any file line | that file did not land; the detail line under it gives the path |
 
@@ -200,7 +243,7 @@ always safe.
 
 ---
 
-## Step 6 — Connect the two clients
+## Step 7 — Connect the two clients
 
 ### Claude Code
 
@@ -227,11 +270,11 @@ same thing.
 
 > Ignore the help paragraph of `get_workspace_info` if it describes an older naming style. That
 > text is upstream prose the patch does not rewrite. It is cosmetic — **the setting line is what
-> counts, and Step 7 is what proves it.**
+> counts, and Step 8 is what proves it.**
 
 ---
 
-## Step 7 — Prove the convention on disk
+## Step 8 — Prove the convention on disk
 
 **Do not skip this.** It is the only step that proves the install rather than describing it. Two
 different AI clients have reported the wrong extension name while the server was producing the
@@ -260,7 +303,7 @@ Delete the throwaway object once you have looked.
 
 ---
 
-## Step 8 — Before your first real task
+## Step 9 — Before your first real task
 
 Read [CONVENTIONS.md](CONVENTIONS.md) once. It is the short version of what the assistant is now
 instructed to do, and what you should hold it to:
@@ -295,6 +338,10 @@ instructed to do, and what you should hold it to:
      `D365FO_PACKAGE_PATH` in `.mcp.json`.
    - **`Filename too long` during the clone** → the target folder is too deep. Use
      `C:\d365fo-mcp-patched`.
+   - **Every search comes back empty, even for a standard table** → the index was never built.
+     Close your editors and run `Install-TeamMcp.ps1 -ForceIndex`.
+   - **`database is locked` during the index** → an editor is still running its own MCP server.
+     Close Claude Code and Visual Studio, then re-run.
 
 ---
 
@@ -304,7 +351,9 @@ instructed to do, and what you should hold it to:
 |---|---|
 | `C:\d365fo-mcp-patched` | the patched server; `dist\index.js` is what the clients execute |
 | `%LOCALAPPDATA%\d365fo-mcp\installation\config\d365fo-mcp.json` | server configuration |
-| `%LOCALAPPDATA%\d365fo-mcp\installation\bridge\` | the C# metadata bridge |
+| `%LOCALAPPDATA%\d365fo-mcp\installation\bridge\` | the C# metadata bridge, **with the DLLs it loads at runtime** |
+| `%LOCALAPPDATA%\d365fo-mcp\installation\data\` | the symbol index — `xpp-metadata.db` (2–3 GB) and its labels database, unless `-IndexPath` moved it |
+| `<roomiest drive>\d365fo-mcp-data\extracted-metadata\` | scratch output of the extraction; safe to delete after the install |
 | `%USERPROFILE%\.mcp.json` | client configuration — Visual Studio / Copilot reads this |
 | `<projects folder>\.mcp.json` | same content — Claude Code reads the one next to your work |
 | `<projects folder>\CLAUDE.md` | rules for Claude Code, rendered with your prefix/model/languages |
@@ -321,7 +370,15 @@ git -C C:\d365fo-mcp-patched pull
 C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
 ```
 
-This is how you pick up a changed team rule. The instruction files in your projects folder are
+This is how you pick up a changed team rule. A re-run leaves the existing index alone, so it
+costs a minute, not an hour. Two cases where you do want to rebuild it:
+
+- **after a platform or application update** — the AOT changed underneath the index,
+- **after importing a model** — its objects are not in the index until it is rebuilt.
+
+Both are `Install-TeamMcp.ps1 -ForceIndex`, with your editors closed.
+
+The instruction files in your projects folder are
 **generated** — edit the templates in the repository, never your local copy. A local edit is
 overwritten on the next install and never reaches your colleagues.
 
@@ -333,6 +390,9 @@ For setting up several machines, everything can be passed in:
 C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 `
     -Prefix ABC_ -LabelLanguages en-US,fr-CA -WorkspacePath 'C:\Users\you\source\repos' -Yes
 ```
+
+Add `-SkipIndex` when you are reconfiguring a machine whose index is already built, and the run
+finishes in under a minute instead of waiting on the AOT.
 
 `-Yes` takes every default and asks nothing. It refuses to guess where guessing would be wrong —
 with several custom models and no `-Model`, it stops and tells you to name one.
@@ -347,7 +407,8 @@ interactive prompts, and UDE detection. If you are among the first to run it on 
 team channel:
 
 - the final report block (all the `[ OK ]` / `[FAIL]` lines),
-- the file name produced in Step 7,
+- the file name produced in Step 8,
+- how long the index step took, and which drive it extracted to,
 - anything the installer asked that you found ambiguous.
 
 That is what turns this from *tested* into *proven*.

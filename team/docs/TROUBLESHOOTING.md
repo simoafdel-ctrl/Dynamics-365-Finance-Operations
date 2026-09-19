@@ -61,23 +61,154 @@ the two ever differ.
 
 ```powershell
 & "$env:LOCALAPPDATA\d365fo-mcp\installation\bridge\D365MetadataBridge.exe" `
-    --packages-path "K:\AosService\PackagesLocalDirectory" --version
+    --packages-path "K:\AosService\PackagesLocalDirectory"
 ```
 
-Expected: `MetadataProvider initialized successfully` then `Bridge ready`.
+Expected — and the **last** lines are the ones that matter:
+
+```
+[INFO] MetadataProvider initialized successfully
+{"id":"ready","result":{"version":"1.0.0","status":"ready","metadataAvailable":true, ... }}
+[INFO] Bridge ready, entering stdin/stdout loop
+```
+
+`MetadataProvider initialized successfully` **on its own proves nothing.** It is printed before
+the bridge serialises a single byte, so a bridge that is one instruction away from crashing
+prints it too. Only the `{"id":"ready"}` line means the bridge can answer. If the output stops
+at the INFO line, go to [the next section](#the-bridge-starts-then-dies-on-its-first-request).
 
 **Do not conclude "the bridge is not compiled".** The binary is almost always already there.
 On one incident an assistant insisted seven times on rebuilding the bridge project while the
-binary was present and working — the only problem was the path. Check these three locations
-before believing anything is missing:
+binary was present and working — the only problem was the path. The deployed bridge lives in
+exactly one place:
 
 ```powershell
 "$env:LOCALAPPDATA\d365fo-mcp\installation\bridge\D365MetadataBridge.exe"
-# the bridge.exePath in your d365fo-mcp.json
-Get-ChildItem C:\d365fo-mcp-patched\bridge -Recurse -Filter D365MetadataBridge.exe
 ```
 
-Only if all three come back empty: `npm run bridge:build` in the clone (needs the .NET SDK).
+If that is missing, re-run `Install-TeamMcp.ps1`: it deploys the bridge together with the DLLs
+it loads at runtime. Do **not** go hunting for a `D365MetadataBridge.exe` inside the clone and
+point `bridge.exePath` at what you find — the copy under `bridge\D365MetadataBridge\obj\` is an
+intermediate build output with no dependencies next to it, and using it causes exactly the
+failure in the next section. `npm run bridge:build` does not help either: it is a compile check
+that builds into a temp folder and deliberately leaves the deployed binary alone.
+
+---
+
+## The bridge starts, then dies on its first request
+
+**Symptom, from the assistant:** the same `C# metadata bridge is not available` /
+`The C# bridge is not connected` as above — but the packages path is correct and
+`D365FO_CUSTOM_PACKAGES_PATH` already equals `D365FO_PACKAGE_PATH`, so the section above does
+not apply.
+
+**Symptom, running the bridge by hand:** it gets all the way through metadata initialisation
+and then throws instead of printing its handshake.
+
+```
+[INFO] MetadataProvider initialized successfully
+[INFO] MetadataWriteService initialized
+
+Unhandled Exception: System.IO.FileNotFoundException: Could not load file or assembly
+'System.Threading.Tasks.Extensions, Version=4.2.0.1, ...' or one of its dependencies.
+   at System.Text.Json.JsonSerializer.SerializeToElement[TValue](...)
+   at D365MetadataBridge.Program.<RunBridge>...
+```
+
+**Root cause.** The bridge is running from a folder that does not contain the DLLs it loads at
+runtime — almost always `bridge\D365MetadataBridge\obj\Release\`, the *intermediate* build
+output. That folder holds the compiled assembly and nothing else. Assembly resolution falls
+back to the D365FO platform `bin`, which is enough to bring up the MetadataProvider, so the
+bridge logs success — and then dies the moment `System.Text.Json` needs a dependency the
+platform `bin` does not carry, which happens on the very first response it tries to serialise.
+
+A bridge in this state passes a naive health check and fails every real call.
+
+**Fix.** Deploy it properly, which is what a re-run of the installer now does:
+
+```powershell
+C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
+```
+
+To do it by hand, build into the deployment folder so the dependencies are copied next to the
+exe, then point the configuration at that copy:
+
+```powershell
+dotnet build C:\d365fo-mcp-patched\bridge\D365MetadataBridge -c Release --no-incremental `
+    -o "$env:LOCALAPPDATA\d365fo-mcp\installation\bridge"
+```
+
+**Verify the deployment rather than the exe.** One file tells the two layouts apart:
+
+```powershell
+Test-Path "$env:LOCALAPPDATA\d365fo-mcp\installation\bridge\System.Threading.Tasks.Extensions.dll"
+```
+
+`False` means the bridge cannot answer, whatever else looks right. Then re-run the bridge by
+hand and require the `{"id":"ready"}` line.
+
+---
+
+## Every search returns nothing, and even standard objects are not found
+
+**Symptom, from the assistant:**
+
+```
+No X++ symbols found matching "VendBankAccount"
+```
+
+```
+Table "VendBankAccount" not found via bridge, symbol index, or on disk.
+```
+
+```
+No custom/ISV models are known to the index, so scope="extensions" can never match.
+```
+
+`get_workspace_info` answers normally and reports your model and prefix, which is what makes
+this one confusing: nothing looks broken. A standard table that obviously exists cannot be
+found, and the index reports `no freshness timestamp yet`.
+
+**Root cause.** The symbol index was never built. The database file exists and has its full
+schema — so nothing errors — and every one of its tables has zero rows. An empty index is
+indistinguishable from a healthy one until you search.
+
+**Confirm it in one command.** `0` here is the whole diagnosis:
+
+```powershell
+node -e "const {DatabaseSync}=require('node:sqlite'); const p=process.env.LOCALAPPDATA+'/d365fo-mcp/installation/data/xpp-metadata.db'; console.log(new DatabaseSync(p,{readOnly:true}).prepare('SELECT COUNT(*) c FROM symbols').get().c)"
+```
+
+A healthy full-AOT index answers with over a million symbols and the file is 2–3 GB.
+
+**Fix.** Close Claude Code and Visual Studio — each runs its own MCP server, and the build needs
+exclusive access to the database — then:
+
+```powershell
+C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 -ForceIndex
+```
+
+Reopen your editor afterwards. The server reads the index at startup, so a server that was
+running while the index was built still has the empty one open.
+
+### `database is locked` during the index
+
+```
+✗ Fatal error: database is locked
+    at Database.pragma (src/database/sqlite.ts:122)
+```
+
+An MCP server still holds the file. `build-database` switches the journal to MEMORY, and SQLite
+refuses that while any other connection is attached — even an idle reader in another process.
+Close every editor that starts a server and re-run. To find what is holding it:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
+  Select-Object ProcessId, CommandLine
+```
+
+Anything running `d365fo-mcp-patched\dist\index.js` is a server. Note that `BEGIN EXCLUSIVE`
+succeeding is not proof the file is free — the journal switch is a stricter condition.
 
 ---
 

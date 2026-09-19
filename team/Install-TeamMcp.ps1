@@ -77,9 +77,13 @@ param(
     [string[]] $LabelLanguages,
     [string]   $ServerRoot,
     [string]   $ConfigRoot,
+    [string]   $MetadataWorkPath,
+    [string]   $IndexPath,
     [switch]   $Yes,
     [switch]   $DryRun,
-    [switch]   $SkipBuild
+    [switch]   $SkipBuild,
+    [switch]   $SkipIndex,
+    [switch]   $ForceIndex
 )
 
 $ErrorActionPreference = 'Stop'
@@ -166,6 +170,62 @@ function ConvertTo-PrettyJson($Object) {
     # PowerShell 5.1 has no JsonSerializerOptions; ConvertTo-Json is enough here and
     # escapes backslashes in Windows paths correctly.
     return ($Object | ConvertTo-Json -Depth 12)
+}
+
+function Test-IndexDatabase([string]$DbPath) {
+    # Symbols = rows in the symbol table, Locked = a live server holds the file.
+    # Both answers come from one node launch; node:sqlite ships with Node 24.
+    $probeFile = Join-Path $env:TEMP "d365fo-mcp-dbprobe-$($script:Stamp)-$([guid]::NewGuid().ToString('N').Substring(0,6)).mjs"
+    $literal = $DbPath.Replace('\', '\\')
+    $code = @"
+import { DatabaseSync } from 'node:sqlite';
+import { existsSync } from 'node:fs';
+const p = '$literal';
+if (!existsSync(p)) { console.log('SYMBOLS=0'); console.log('LOCK=free'); process.exit(0); }
+let n = 0;
+let reader;
+try {
+  // MAX(rowid) is O(1); COUNT(*) on a multi-GB index blocks for a minute.
+  reader = new DatabaseSync(p, { readOnly: true });
+  const row = reader.prepare('SELECT MAX(rowid) AS c FROM symbols').get();
+  n = (row && row.c) ? row.c : 0;
+} catch { n = 0; } finally {
+  // Closing matters: an open read handle - even this one, even read-only, even in this
+  // process - is exactly what the journal switch below refuses to share. Leaving it open
+  // reports every existing database as locked.
+  try { if (reader) reader.close(); } catch { }
+}
+console.log('SYMBOLS=' + n);
+// Reproduce the exact condition the build needs, which is stricter than BEGIN EXCLUSIVE:
+// build-database switches the journal to MEMORY (scripts/build-database.ts), and SQLite
+// refuses that while any other connection holds the WAL - even an idle reader. Testing it
+// with BEGIN EXCLUSIVE instead reports "free" and the build then dies on its first pragma.
+let writer;
+try {
+  writer = new DatabaseSync(p);
+  writer.exec('PRAGMA journal_mode = MEMORY');
+  writer.exec('PRAGMA journal_mode = WAL');   // put it back: the probe must not change the file
+  console.log('LOCK=free');
+} catch { console.log('LOCK=busy'); } finally {
+  try { if (writer) writer.close(); } catch { }
+}
+"@
+    [System.IO.File]::WriteAllText($probeFile, $code, (New-Object System.Text.UTF8Encoding($false)))
+    $out = Invoke-Native 'node' @($probeFile)
+    Remove-Item -LiteralPath $probeFile -Force -ErrorAction SilentlyContinue
+    $symbols = 0
+    if ($out -match 'SYMBOLS=(\d+)') { $symbols = [int]$Matches[1] }
+    return [pscustomobject]@{ Symbols = $symbols; Locked = ($out -match 'LOCK=busy') }
+}
+
+function Get-FreeGb([string]$Path) {
+    # -1 when the drive cannot be read, so callers can tell "no room" from "unknown".
+    try {
+        $qualifier = Split-Path -Qualifier $Path
+        $disk = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$qualifier'" -ErrorAction Stop
+        if ($disk) { return [math]::Round($disk.FreeSpace / 1GB, 1) }
+    } catch { }
+    return -1
 }
 
 function Invoke-Tool([string]$Exe, [string[]]$Arguments) {
@@ -435,37 +495,67 @@ if ($Model) {
 }
 $modelWritePath = Join-Path $PackagePath (Join-Path $Model $Model)
 
-# --- bridge: look before concluding anything is missing.
-$bridgeCandidates = @(
-    $(if ($existingConfig -and $existingConfig.bridge) { [string]$existingConfig.bridge.exePath } else { $null }),
-    (Join-Path (Split-Path -Parent $ConfigRoot) 'bridge\D365MetadataBridge.exe'),
-    (Join-Path $env:LOCALAPPDATA 'd365fo-mcp\installation\bridge\D365MetadataBridge.exe')
-)
-$bridgeExe = $null
-foreach ($c in $bridgeCandidates) { if ($c -and (Test-Path -LiteralPath $c)) { $bridgeExe = $c; break } }
-if (-not $bridgeExe) {
-    $found = Get-ChildItem -LiteralPath (Join-Path $ServerRoot 'bridge') -Recurse -Filter 'D365MetadataBridge.exe' -File -ErrorAction SilentlyContinue |
-             Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($found) { $bridgeExe = $found.FullName }
-}
-if (-not $bridgeExe -and -not $DryRun) {
-    Write-Step 'no bridge binary found in any known location - building it (npm run bridge:build)'
-    if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        Stop-Install 'The C# metadata bridge is not built and the .NET SDK is not on PATH.' @(
-            'Install the .NET SDK (https://dotnet.microsoft.com/download), reopen PowerShell, run this script again.'
-        )
+# --- bridge: deploy it next to its dependencies, and never reuse an intermediate build.
+#
+# Two traps this block exists to avoid, both of which shipped a bridge that started and
+# then died on its first request:
+#
+#  * `npm run bridge:build` is a COMPILE GATE, not a deployment. It builds into a scratch
+#    temp folder on purpose (see scripts/bridgeBuild.mjs) and leaves the deployed binary
+#    untouched, so it never produces anything runnable here.
+#  * the leftover obj\Release output is not runnable either. It holds the assembly alone,
+#    without the NuGet dependencies, so the bridge initialises its MetadataProvider, logs
+#    "initialized successfully", and then throws FileNotFoundException on
+#    System.Threading.Tasks.Extensions the moment System.Text.Json serialises its ready
+#    handshake. Picking it up with a recursive Get-ChildItem is what used to happen.
+#
+# `dotnet build -o <dir>` copies the dependencies next to the exe, which is what makes the
+# difference between "an exe exists" and "the bridge can answer".
+$bridgeDeployDir = Join-Path (Split-Path -Parent $ConfigRoot) 'bridge'
+$bridgeExe       = Join-Path $bridgeDeployDir 'D365MetadataBridge.exe'
+$bridgeProject   = Join-Path $ServerRoot 'bridge\D365MetadataBridge'
+# Sentinel dependency: present in a real deployment, absent from obj\Release. Testing for
+# it is how a half-deployed bridge is told apart from a complete one.
+$bridgeDep       = Join-Path $bridgeDeployDir 'System.Threading.Tasks.Extensions.dll'
+
+$bridgeReady = (Test-Path -LiteralPath $bridgeExe) -and (Test-Path -LiteralPath $bridgeDep)
+if ($bridgeReady) {
+    # Sources newer than the deployed exe mean a pull landed since the last install.
+    $exeStamp = (Get-Item -LiteralPath $bridgeExe).LastWriteTimeUtc
+    $newestSrc = Get-ChildItem -LiteralPath $bridgeProject -Recurse -Include '*.cs', '*.csproj' -File -ErrorAction SilentlyContinue |
+                 Where-Object { $_.FullName -notmatch '\\obj\\' } |
+                 Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
+    if ($newestSrc -and $newestSrc.LastWriteTimeUtc -gt $exeStamp) {
+        Write-Step 'bridge sources are newer than the deployed binary - redeploying'
+        $bridgeReady = $false
     }
-    Push-Location $ServerRoot
-    try { $null = Invoke-Tool 'npm' @('run', 'bridge:build') } finally { Pop-Location }
-    $found = Get-ChildItem -LiteralPath (Join-Path $ServerRoot 'bridge') -Recurse -Filter 'D365MetadataBridge.exe' -File -ErrorAction SilentlyContinue |
-             Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-    if ($found) { $bridgeExe = $found.FullName }
+} elseif (Test-Path -LiteralPath $bridgeExe) {
+    Write-Step 'deployed bridge is missing its dependencies - redeploying'
 }
-if (-not $bridgeExe) {
-    Stop-Install 'No D365MetadataBridge.exe could be found or built.' @(
-        'Checked: the configured bridge.exePath, %LOCALAPPDATA%\d365fo-mcp\installation\bridge, and the clone.',
-        'Build it manually with: npm run bridge:build   (needs the .NET SDK)'
-    )
+
+if (-not $bridgeReady) {
+    if ($DryRun) {
+        Write-Step "would deploy the bridge to $bridgeDeployDir (dotnet build -c Release)"
+    } else {
+        if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
+            Stop-Install 'The C# metadata bridge must be deployed and the .NET SDK is not on PATH.' @(
+                'Install the .NET SDK (https://dotnet.microsoft.com/download), reopen PowerShell, run this script again.'
+            )
+        }
+        Write-Step "deploying the bridge to $bridgeDeployDir"
+        $null = New-Item -ItemType Directory -Path $bridgeDeployDir -Force
+        $rc = Invoke-Tool 'dotnet' @('build', $bridgeProject, '-c', 'Release', '--no-incremental', '-o', $bridgeDeployDir)
+        if ($rc -ne 0) { Stop-Install 'dotnet build of the metadata bridge failed - see the output above.' }
+        if (-not (Test-Path -LiteralPath $bridgeExe)) {
+            Stop-Install "The bridge build reported success but produced no exe at $bridgeExe"
+        }
+        if (-not (Test-Path -LiteralPath $bridgeDep)) {
+            Stop-Install 'The bridge was built without its NuGet dependencies.' @(
+                "Expected $bridgeDep next to the exe.",
+                'Without it the bridge dies on its first response with a FileNotFoundException.'
+            )
+        }
+    }
 }
 Write-Ok "bridge         $bridgeExe"
 
@@ -551,6 +641,38 @@ Write-Ok "workspace      $WorkspacePath"
 # ================================================================ 4. write config
 Write-Head '4. Configuration files'
 
+$installRoot = Split-Path -Parent $ConfigRoot
+
+# --- where the extraction dumps its JSON before the database load.
+# A full AOT extraction is tens of GB and is only read once, by the database build. On
+# these VMs the system drive is the small one and the packages drive is the large one, so
+# an install that defaults it next to the config is the install that runs out of disk.
+if (-not $MetadataWorkPath) {
+    $MetadataWorkPath = Join-Path $installRoot 'extracted-metadata'
+    $freeHere = Get-FreeGb $MetadataWorkPath
+    $freeThere = Get-FreeGb $PackagePath
+    if ($freeHere -ge 0 -and $freeHere -lt 40 -and $freeThere -gt $freeHere) {
+        $MetadataWorkPath = Join-Path (Split-Path -Qualifier $PackagePath) '\d365fo-mcp-data\extracted-metadata'
+        Write-Warn "only $freeHere GB free on the installation drive - extracting to $MetadataWorkPath instead ($freeThere GB free)"
+    }
+}
+Write-Ok "extract folder $MetadataWorkPath"
+
+# --- where the symbol index lives.
+# Kept overridable, and an override already recorded in the config is honoured rather than
+# reset: a 2-3 GB index is sometimes deliberately parked off the system drive, and silently
+# writing the default back would point the server at an empty database next to this file.
+if (-not $IndexPath) {
+    if ($existingConfig -and $existingConfig.index -and $existingConfig.index.dbPath) {
+        $IndexPath = Split-Path -Parent ([string]$existingConfig.index.dbPath)
+    } else {
+        $IndexPath = Join-Path $installRoot 'data'
+    }
+}
+$dbPath       = Join-Path $IndexPath 'xpp-metadata.db'
+$labelsDbPath = Join-Path $IndexPath 'xpp-metadata-labels.db'
+Write-Ok "index folder   $IndexPath"
+
 # --- server configuration
 $serverConfig = [ordered]@{
     version     = 1
@@ -574,6 +696,12 @@ $serverConfig = [ordered]@{
         includeLabels  = $true
         labelLanguages = @($LabelLanguages)
         bpCatalogPath  = './data/bp-moniker-catalog.json'
+        # Recorded so the server and the index step below agree on one location. Left to
+        # its default the server resolves it relative to this file and would look in a
+        # folder the extraction never wrote to.
+        metadataPath   = $MetadataWorkPath
+        dbPath         = $dbPath
+        labelsDbPath   = $labelsDbPath
     }
     server      = [ordered]@{ mode = 'full' }
     bridge      = [ordered]@{ exePath = $bridgeExe }
@@ -599,6 +727,12 @@ $serverEntry = [ordered]@{
         D365FO_CUSTOM_PACKAGES_PATH = $PackagePath
         D365FO_MODEL_NAME           = $Model
         D365FO_BRIDGE_EXE_PATH      = $bridgeExe
+        # Same reason as the paths above: passed explicitly rather than left to the config
+        # file. A server that falls back to the default resolves ./data next to its config
+        # and opens an empty database, which looks like a healthy install that finds nothing.
+        DB_PATH                     = $dbPath
+        LABELS_DB_PATH              = $labelsDbPath
+        METADATA_PATH               = $MetadataWorkPath
         EXTENSION_NAMING_STYLE      = 'prefix-first'
         EXTENSION_PREFIX            = $prefixStored
         EXTENSION_PREFIX_SOURCE     = 'config'
@@ -660,8 +794,75 @@ function Render-Template([string]$TemplatePath, [string]$OutPath) {
 Render-Template (Join-Path $templateDir 'CLAUDE.md')                 (Join-Path $WorkspacePath 'CLAUDE.md')
 Render-Template (Join-Path $templateDir 'copilot-instructions.md')   (Join-Path $WorkspacePath '.github\copilot-instructions.md')
 
-# ================================================================ 6. verification
-Write-Head '6. Verification'
+# ================================================================ 6. metadata index
+Write-Head '6. Metadata index'
+
+# Without this step the install completes and every symbol tool answers nothing: `search`
+# finds no object, `get_object_info` reports even a standard table as "not found via
+# bridge, symbol index, or on disk", and scope="extensions" claims no custom model exists.
+# The database file alone is not enough - the wizard creates the schema, and a schema with
+# zero rows looks exactly like a healthy install until someone searches.
+#
+# `d365fo-mcp index` is deliberately NOT used here. It resolves its data root to the repo
+# root whenever the server is a git checkout (src/cli/context.ts: `if (installMode ===
+# 'git') return repoRoot`, which also ignores D365FO_MCP_HOME), and this layout is a git
+# checkout whose config and data live under %LOCALAPPDATA% instead. It would build a
+# database in the clone that the server never opens. The paths are passed explicitly.
+$extractTs = Join-Path $ServerRoot 'scripts\extract-metadata.ts'
+
+if ($DryRun) {
+    Write-Step "would extract metadata to $MetadataWorkPath, then build $dbPath"
+} elseif ($SkipIndex) {
+    Write-Warn '-SkipIndex: the index was left untouched. Symbol tools stay empty until it is built.'
+} elseif (-not (Test-Path -LiteralPath $extractTs)) {
+    Write-Warn "no scripts\extract-metadata.ts under $ServerRoot - cannot index from this layout."
+} else {
+    $null = New-Item -ItemType Directory -Path $IndexPath -Force
+
+    # Probe before building: a rebuild is 15-45 minutes, so a populated index is left alone
+    # unless -ForceIndex. The same probe reports whether a server still holds the file -
+    # build-database takes locking_mode = EXCLUSIVE and cannot share it with a live server.
+    $probe      = Test-IndexDatabase $dbPath
+    $symbolsNow = $probe.Symbols
+    $dbLocked   = $probe.Locked
+
+    if ($symbolsNow -gt 0 -and -not $ForceIndex) {
+        Write-Ok "index already populated ($symbolsNow symbols) - pass -ForceIndex to rebuild"
+    } elseif ($dbLocked) {
+        Stop-Install 'The metadata database is held by a running MCP server, so it cannot be rebuilt.' @(
+            'Close Claude Code and Visual Studio (both start their own server), then run this script again.',
+            'The database build needs exclusive access: SQLite cannot grant it while a server holds the file.'
+        )
+    } else {
+        Write-Step 'this runs once and takes 15-45 minutes on a full AOT - leave the window open'
+        $env:METADATA_PATH       = $MetadataWorkPath
+        $env:DB_PATH             = $dbPath
+        $env:LABELS_DB_PATH      = $labelsDbPath
+        $env:D365FO_PACKAGE_PATH = $PackagePath
+        $env:EXTRACT_MODE        = 'all'
+        $env:CUSTOM_MODELS       = $Model
+        $env:INCLUDE_LABELS      = 'true'
+
+        Push-Location $ServerRoot
+        try {
+            Write-Step '[1/2] extracting metadata from the packages folder (XML -> JSON)'
+            $rc = Invoke-Tool 'npm' @('run', 'extract-metadata')
+            if ($rc -ne 0) { Stop-Install 'Metadata extraction failed - see the output above.' }
+
+            Write-Step '[2/2] building the symbol database (JSON -> SQLite)'
+            $rc = Invoke-Tool 'npm' @('run', 'build-database')
+            if ($rc -ne 0) {
+                Stop-Install 'The database build failed - see the output above.' @(
+                    'If it failed on a locked database, close every editor that starts an MCP server and re-run.'
+                )
+            }
+        } finally { Pop-Location }
+        Write-Ok 'index built'
+    }
+}
+
+# ================================================================ 7. verification
+Write-Head '7. Verification'
 
 # (a) naming, run against the compiled code with this environment values.
 # dist can legitimately be absent here: -DryRun and -SkipBuild both skip the build. That
@@ -697,19 +898,40 @@ if (-not $namingPass) { Write-Warn "naming test output was: $($namingLines -join
 
 }   # end of the naming test
 
-# (b) the bridge starts against this packages path
-$bridgeOut = Invoke-Native $bridgeExe @('--packages-path', $PackagePath, '--version')
-$bridgePass = $bridgeOut -match 'MetadataProvider initialized successfully'
-Add-Check 'bridge starts against the packages path' $bridgePass 'expected: MetadataProvider initialized successfully'
+# (b) the bridge answers against this packages path.
+#
+# The assertion is the ready handshake, NOT "MetadataProvider initialized successfully".
+# That line is printed BEFORE the first serialisation, so a bridge deployed without its
+# NuGet dependencies prints it and then dies - and this check used to pass on a bridge that
+# could not answer a single request. Only the handshake proves it got through
+# System.Text.Json and reached its stdin loop.
+$bridgeOut = Invoke-Native $bridgeExe @('--packages-path', $PackagePath)
+$bridgePass = $bridgeOut -match '"status"\s*:\s*"ready"'
+Add-Check 'bridge answers its ready handshake' $bridgePass 'expected a {"id":"ready"} line with status ready'
 if (-not $bridgePass) {
     Write-Warn 'bridge output:'
     Write-Host $bridgeOut -ForegroundColor DarkGray
     if ($bridgeOut -match 'bin path not found') {
         Write-Warn "the packages path is wrong - the bridge needs the folder that CONTAINS bin\Microsoft.Dynamics.AX.Metadata.dll"
     }
+    if ($bridgeOut -match 'Could not load file or assembly') {
+        Write-Warn 'the bridge is missing its NuGet dependencies - it was deployed from an intermediate'
+        Write-Warn 'obj\ folder instead of a real output folder. Re-run without -DryRun to redeploy it.'
+    }
+}
+Add-Check 'bridge has its dependencies' (Test-Path -LiteralPath $bridgeDep) $bridgeDep
+
+# (c) the symbol index holds symbols.
+# This is the one failure that looks like a healthy install: every tool responds, the
+# report is green, and every search comes back empty because the schema has no rows.
+if ($DryRun -or $SkipIndex) {
+    Write-Warn 'index check skipped (-DryRun / -SkipIndex) - symbol tools stay empty until it is built.'
+} else {
+    $idxState = Test-IndexDatabase $dbPath
+    Add-Check 'symbol index is populated' ($idxState.Symbols -gt 0) "$dbPath holds $($idxState.Symbols) symbols"
 }
 
-# (c) every file landed, and says what it must say
+# (d) every file landed, and says what it must say
 if ((-not (Test-Path -LiteralPath $distEntry)) -and ($DryRun -or $SkipBuild)) {
     # Same reasoning as the naming test: a missing dist under -DryRun/-SkipBuild is the
     # switch doing its job, not a broken install. Reporting it as a failure would send
