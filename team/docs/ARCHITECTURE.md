@@ -14,14 +14,18 @@ C:\d365fo-mcp-patched\              clone of the internal fork (upstream 1.17.3 
 ├─ prefix-first-naming-1.17.3.patch the standalone patch, for re-applying to a future upstream
 └─ team\                            everything we own
    ├─ bootstrap.ps1                 one-liner entry point: clone/update -> build -> install
-   ├─ Install-TeamMcp.ps1           detect -> ask -> validate -> write -> verify
+   ├─ Install-TeamMcp.ps1           detect -> ask -> validate -> write -> index -> verify
+   ├─ Uninstall-TeamMcp.ps1         unregister -> drop config/bridge/index -> report
    ├─ templates\                    generic instruction templates, {{TOKEN}} placeholders
    └─ docs\                         ONBOARDING, CONVENTIONS, TROUBLESHOOTING, this file
 
 %LOCALAPPDATA%\d365fo-mcp\installation\
 ├─ config\d365fo-mcp.json           server configuration (generated)
-├─ bridge\D365MetadataBridge.exe    C# metadata bridge
-└─ extracted-metadata\              the index
+├─ bridge\                          C# metadata bridge - the exe AND the DLLs it loads
+└─ data\                            the symbol index, 2-3 GB (moves with -IndexPath)
+
+<roomiest drive>\d365fo-mcp-data\
+└─ extracted-metadata\              XML dumped to JSON, input to the index build only
 
 <projects folder>\
 ├─ .mcp.json                        client config - the one Claude Code finds

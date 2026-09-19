@@ -388,8 +388,20 @@ Remove-Item $empty -Recurse -Force
 
 ## Undo an install
 
-Every file replaced by the installer is backed up next to itself as `<name>.bak-<timestamp>`.
-To roll back, restore the backups you care about:
+To remove the installation altogether, use the uninstaller rather than deleting folders by hand
+— it finds an index that was moved off the default drive, and it unregisters the server without
+throwing away any other MCP server in your `.mcp.json`:
+
+```powershell
+C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1 -DryRun   # the plan
+C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1           # with your editors closed
+```
+
+See [ONBOARDING.md](ONBOARDING.md#removing-it-again) for the switches, notably `-KeepIndex` when
+you intend to reinstall.
+
+To roll back a **re-install** instead, every file the installer replaced is backed up next to
+itself as `<name>.bak-<timestamp>`. Restore the ones you care about:
 
 ```powershell
 Get-ChildItem "$env:USERPROFILE\.mcp.json.bak-*" | Sort-Object LastWriteTime -Descending | Select-Object -First 1

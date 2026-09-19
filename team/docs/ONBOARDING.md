@@ -382,6 +382,51 @@ The instruction files in your projects folder are
 **generated** — edit the templates in the repository, never your local copy. A local edit is
 overwritten on the next install and never reaches your colleagues.
 
+## Removing it again
+
+There is a matching uninstaller. **Look before you leap** — it prints the full plan and writes
+nothing:
+
+```powershell
+C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1 -DryRun
+```
+
+Then, with Claude Code and Visual Studio closed:
+
+```powershell
+C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1
+```
+
+It asks you to type `REMOVE` before touching anything, and refuses to start at all while an MCP
+server is still running — those processes hold the bridge and the index open, so a removal would
+otherwise fail halfway through.
+
+| Switch | Effect |
+|---|---|
+| `-DryRun` | print the plan, remove nothing |
+| `-KeepIndex` | keep the index and the extraction folder. Use it when you will reinstall — it is the 15–45 minute part |
+| `-RemoveServer` | also delete the clone at `C:\d365fo-mcp-patched`. Kept by default |
+| `-Yes` | skip the `REMOVE` confirmation, for scripted teardown |
+
+What it removes:
+
+- the `d365fo-mcp-tools` entry from both `.mcp.json` files — **the entry, not the file**, so any
+  other MCP server you registered survives. The file is deleted only when nothing else is left
+  in it,
+- the generated `CLAUDE.md` and `.github\copilot-instructions.md`,
+- the configuration, the bridge, the symbol index and the extraction folder — read from your
+  `d365fo-mcp.json`, so an index you moved with `-IndexPath` is found where it actually is
+  rather than where the default would have put it.
+
+**Your D365FO metadata is never touched.** Models, projects and the AOT are left exactly as they
+were — the installer only ever wrote to its own folders. Every file it removes is backed up
+beside itself as `<name>.bak-<timestamp>` first.
+
+Afterwards, restart Claude Code and Visual Studio so they stop trying to launch a server that is
+no longer there.
+
+---
+
 ## Unattended install
 
 For setting up several machines, everything can be passed in:
