@@ -644,14 +644,18 @@ Write-Head '4. Configuration files'
 $installRoot = Split-Path -Parent $ConfigRoot
 
 # --- where the extraction dumps its JSON before the database load.
-# A full AOT extraction is tens of GB and is only read once, by the database build. On
-# these VMs the system drive is the small one and the packages drive is the large one, so
-# an install that defaults it next to the config is the install that runs out of disk.
+# Only ~1.5 GB of JSON, but spread over ~190,000 tiny files: on a volume with large
+# allocation units that occupies closer to 10 GB, and it is read exactly once, by the
+# database build. On these VMs the system drive is the small one and the packages drive is
+# the large one, so an install that defaults it next to the config is the install that runs
+# out of disk.
 if (-not $MetadataWorkPath) {
     $MetadataWorkPath = Join-Path $installRoot 'extracted-metadata'
     $freeHere = Get-FreeGb $MetadataWorkPath
     $freeThere = Get-FreeGb $PackagePath
-    if ($freeHere -ge 0 -and $freeHere -lt 40 -and $freeThere -gt $freeHere) {
+    # 25 GB, not 15: the extraction plus the index need ~13 GB, and filling the system
+    # drive to its last couple of GB breaks more than this install.
+    if ($freeHere -ge 0 -and $freeHere -lt 25 -and $freeThere -gt $freeHere) {
         $MetadataWorkPath = Join-Path (Split-Path -Qualifier $PackagePath) '\d365fo-mcp-data\extracted-metadata'
         Write-Warn "only $freeHere GB free on the installation drive - extracting to $MetadataWorkPath instead ($freeThere GB free)"
     }

@@ -31,7 +31,7 @@ $PSVersionTable.PSVersion                           # 5.1 or 7.x, both fine
 | **Git** | used to clone the fork |
 | **A traditional environment** — a local `AosService\PackagesLocalDirectory` | UDE is not supported yet, see [ARCHITECTURE.md](ARCHITECTURE.md#scope-traditional-only) |
 | **A custom model already created** | the server needs somewhere to write; create it in Visual Studio first if absent |
-| **~40 GB free** on some drive | the AOT extraction is large and short-lived; the installer puts it on the roomiest drive it can and tells you which |
+| **~15 GB free** on some drive | the extraction is ~1.5 GB of JSON but lands in ~190 000 tiny files, so it occupies nearer 10 GB on a volume with large clusters; the index adds 2–3 GB. The installer picks the roomiest drive and tells you which |
 | **Admin rights** | only if you still need to install Node or Git |
 
 Nothing else. You do **not** need Visual Studio open, and you do not need the AOS running.
