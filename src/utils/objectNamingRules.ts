@@ -14,7 +14,12 @@
  * ~35 existing tests are the proof that the rules did not change in the move.
  */
 
-import { getObjectSuffix, getExtensionNamingStyle, deriveExtensionInfix } from './modelClassifier.js';
+import {
+  getObjectSuffix,
+  getExtensionNamingStyle,
+  deriveExtensionInfix,
+  resolveRegularObjectPrefixToken,
+} from './modelClassifier.js';
 import {
   matchPrefixCandidate,
   modelWritesLandIn,
@@ -471,7 +476,13 @@ export async function checkObjectNaming(
           warnings.push(
             `Proposed name does not start with model prefix "${prefix}". All custom objects should be prefixed to avoid conflicts.`,
           );
-          suggestions.push(`Prefixed name: ${prefix}${name}`);
+          // The token the WRITE path prepends, not the bare prefix: an
+          // underscore-style EXTENSION_PREFIX ("CON_") keeps its underscore for
+          // regular objects, so applyObjectPrefix() produces CON_MyTable while
+          // `${prefix}${name}` suggested CONMyTable — a name no write would ever
+          // produce. prepare() renders this same suggestion next to the final
+          // name it predicts, so the two contradicted each other on screen.
+          suggestions.push(`Prefixed name: ${resolveRegularObjectPrefixToken(modelName) || prefix}${name}`);
         } else if (!leading.effective) {
           warnings.push(
             `"${name}" carries "${leading.token}" (${leading.label}), not the prefix this server ` +

@@ -40,15 +40,17 @@ export const LABELS_OVERRIDE_PARAMS: Record<string, string> = {
     'necessary with it: this one call IS the search-then-create pair. Combine with labels[] to ' +
     'do a whole object\'s labels in one call. It never overwrites — use action="update" for that.',
   createLabelFileIfMissing:
-    '[create] Create the AxLabelFile structure if missing (default: true). A wrong-path guard still ' +
-    'fails loudly when the model directory is not found, so no phantom file is produced. ' +
-    'Set false to fail fast instead.',
+    '[create] Create the AxLabelFile when the model does not have it (default: FALSE). A label file ' +
+    'is a deliverable of its own, so it is never created as a side effect: the call fails instead ' +
+    'and names the label files the model does have. Use one of those, or ask which one to use when ' +
+    'the request does not say. Set true only once a new file is confirmed to be wanted.',
   sortLabels:
     '[create] Sort labels alphabetically in .label.txt (default true, from LABEL_SORT_ORDER env; ' +
     'false = append at end).',
   languages:
-    '[create] string[] — restrict which language .label.txt files are written (e.g. ["en-US"]). ' +
-    'Omitted = every language folder present in the model.',
+    '[create] string[] — write a locale you have NO translation for (falls back to the en-US text). ' +
+    'By default the label goes to exactly the languages in `translations` and nowhere else. ' +
+    'LABEL_LANGUAGE_SCOPE=model restores the old "every locale present in the model" behaviour.',
   defaultComment:
     '[create] Developer comment for languages without an explicit comment.',
   description:

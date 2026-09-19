@@ -88,8 +88,11 @@ export function getObjectSuffix(): string {
  *    EXTENSION_PREFIX still applies to NEW objects and to fields/methods added
  *    inside extensions — only the extension element/class token changes.
  *
- * Configured via EXTENSION_NAMING_STYLE. Any value other than 'model-name'
- * (including unset) resolves to 'prefix' so existing setups are unchanged.
+ * Configured via EXTENSION_NAMING_STYLE. Any value other than 'model-name' or
+ * 'prefix-first' (including unset) resolves to 'prefix', the Microsoft
+ * prefix-infix guideline, so a checkout with no configuration behaves as upstream
+ * documents. The house convention is 'prefix-first' and install.ps1 seeds it into
+ * the config file — an installation choice, not a change of the library default.
  */
 export function getExtensionNamingStyle(): 'prefix' | 'model-name' | 'prefix-first' {
   const raw = process.env.EXTENSION_NAMING_STYLE?.trim().toLowerCase();

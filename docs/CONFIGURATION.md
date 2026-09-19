@@ -77,7 +77,7 @@ How generated objects, extensions and fields are named.
 | `naming.prefix` | setup | `EXTENSION_PREFIX` | — | Your ISV/customer prefix. Prepended to every generated object, field and method name and enforced by the naming validator, so BP checks pass on the first build. Used as the **fallback**: when the active model's existing objects already show a prefix, that one wins — see [Where the prefix comes from](CUSTOM_EXTENSIONS.md#where-the-prefix-comes-from). |
 | `naming.prefixSource` | advanced | `EXTENSION_PREFIX_SOURCE` | `model` | Whether the effective prefix is learned from the active model's own objects or pinned to the configured `naming.prefix`. Pin it when one model carries several feature prefixes that share a stem — inference learns the shared stem, while the objects you write need the full one. See [Where the prefix comes from](CUSTOM_EXTENSIONS.md#where-the-prefix-comes-from). Values: `model` — the model's own objects decide, falling back to naming.prefix; `config` — always naming.prefix, inference off (pre-1.8.2 behaviour). |
 | `naming.suffix` | advanced | `EXTENSION_SUFFIX` | — | Optional suffix appended to new object names (MyTableZZ with suffix "ZZ"). Most projects use only a prefix — leave empty unless your convention requires one. |
-| `naming.extensionStyle` | advanced | `EXTENSION_NAMING_STYLE` | `prefix` | Whether extension classes/elements embed the prefix (per the Microsoft prefix guideline) or the model name (the Visual Studio default). Use model-name when your model name is long but your prefix is a short abbreviation. Values: `prefix` — CustTable.CrExtension — embeds the extension prefix; `model-name` — CustTable.ContosoRobotics — embeds the model name (VS default). |
+| `naming.extensionStyle` | advanced | `EXTENSION_NAMING_STYLE` | `prefix-first` | Whether extension classes/elements embed the prefix (per the Microsoft prefix guideline), the model name (the Visual Studio default), or the prefix on classes and the model name on elements (prefix-first, the house convention and the default here). Use model-name when your model name is long but your prefix is a short abbreviation. Values: `prefix-first` — CON_CustTable_Extension + CustTable.ContosoRobotics — prefix leads classes, model closes elements; `prefix` — CustTableCr_Extension + CustTable.CrExtension — embeds the extension prefix; `model-name` — CustTable_ContosoRobotics_Extension + CustTable.ContosoRobotics — model name (VS default). |
 
 ### Metadata index
 
@@ -93,6 +93,7 @@ What gets extracted into the SQLite index and where it is stored.
 | `index.metadataPath` | advanced | `METADATA_PATH` | `./extracted-metadata` | Working folder for the XML dumped during extraction, before it is loaded into the database. |
 | `index.bpCatalogPath` | advanced | `BP_CATALOG_PATH` | — | Per-instance JSON catalog of real BP-check monikers, extracted from this instance's own D365FO version (scripts/extract-bp-catalog.ps1). Falls back to the compiled-in snapshot when absent — this setting is only written once an instance has regenerated its own catalog. |
 | `index.labelSortOrder` | advanced | `LABEL_SORT_ORDER` | `alphabetical` | Alphabetical keeps .label.txt files sorted (smaller diffs, matches most teams); append adds new labels at the end of the file (preserves manual grouping). Values: `alphabetical` — insert in sorted position; `append` — add at the end of the file. |
+| `index.labelLanguageScope` | advanced | `LABEL_LANGUAGE_SCOPE` | `translations` | Translations (default) writes a label only to the languages its text is given in. Model writes it to every locale folder the model already has — but LabelResources/ is shared by every label file of the model, so those folders usually belong to OTHER label files: one call then creates a label file per locale, in the model and in the .rnrproj. Values: `translations` — only the languages you provide text for; `model` — every locale present in the model (pre-2026 behaviour). |
 | `index.computeStats` | advanced | `COMPUTE_STATS` | `false` | Adds per-object usage counts used for ranking. Noticeably slows down large builds. |
 | `index.warmup` | advanced | `INDEX_WARMUP` | `on` | Reads the indexes the request paths use into the OS file cache, on a worker thread, before the first question needs them. Measured on the reference environment: the first covering scan of the symbol-name index costs 83 s cold and 0.11 s warm, and the label join behind every label search 31 s cold. Turn it off where a second reader of the same file is not free. Values: `on` — warm in the background at startup (default); `off` — first query pays for the cold cache, as before. |
 | `index.warmupBudgetMs` | advanced | `INDEX_WARMUP_BUDGET_MS` | `600000` | The warm-up stops beginning new steps once it has run this long; steps are ordered by what the request paths wait on longest, so the budget cuts the least useful ones first. |
@@ -187,7 +188,7 @@ Downloading a pre-built index from blob storage instead of building it locally.
     "prefix": "ISV_",
     "prefixSource": "model",
     "suffix": "",
-    "extensionStyle": "prefix"
+    "extensionStyle": "prefix-first"
   },
   "index": {
     "extractMode": "all",
@@ -200,6 +201,7 @@ Downloading a pre-built index from blob storage instead of building it locally.
     "metadataPath": "./extracted-metadata",
     "bpCatalogPath": "",
     "labelSortOrder": "alphabetical",
+    "labelLanguageScope": "translations",
     "computeStats": false,
     "warmup": "on",
     "warmupBudgetMs": 600000

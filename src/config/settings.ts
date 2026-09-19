@@ -352,13 +352,15 @@ export const SETTINGS: Setting[] = [
     type: 'enum',
     label: 'How extension elements are named',
     description:
-      'Whether extension classes/elements embed the prefix (per the Microsoft prefix guideline) or the model name ' +
-      '(the Visual Studio default). Use model-name when your model name is long but your prefix is a short abbreviation.',
-    default: 'prefix',
+      'Whether extension classes/elements embed the prefix (per the Microsoft prefix guideline), the model name ' +
+      '(the Visual Studio default), or the prefix on classes and the model name on elements (prefix-first, the ' +
+      'house convention and the default here). Use model-name when your model name is long but your prefix is a ' +
+      'short abbreviation.',
+    default: 'prefix-first',
     choices: [
-      { value: 'prefix', hint: 'CustTable.CrExtension — embeds the extension prefix' },
-      { value: 'model-name', hint: 'CustTable.ContosoRobotics — embeds the model name (VS default)' },
-      { value: 'prefix-first', hint: 'CustTable.Model + Cr_CustTable_Extension — prefix leads on classes' },
+      { value: 'prefix-first', hint: 'CON_CustTable_Extension + CustTable.ContosoRobotics — prefix leads classes, model closes elements' },
+      { value: 'prefix', hint: 'CustTableCr_Extension + CustTable.CrExtension — embeds the extension prefix' },
+      { value: 'model-name', hint: 'CustTable_ContosoRobotics_Extension + CustTable.ContosoRobotics — model name (VS default)' },
     ],
   },
 
@@ -475,6 +477,24 @@ export const SETTINGS: Setting[] = [
     choices: [
       { value: 'alphabetical', hint: 'insert in sorted position' },
       { value: 'append', hint: 'add at the end of the file' },
+    ],
+  },
+  {
+    path: 'index.labelLanguageScope',
+    env: 'LABEL_LANGUAGE_SCOPE',
+    section: 'index',
+    tier: 'advanced',
+    type: 'enum',
+    label: 'Which languages a new label is written to',
+    description:
+      'Translations (default) writes a label only to the languages its text is given in. Model writes it to every ' +
+      'locale folder the model already has — but LabelResources/ is shared by every label file of the model, so ' +
+      'those folders usually belong to OTHER label files: one call then creates a label file per locale, in the ' +
+      'model and in the .rnrproj.',
+    default: 'translations',
+    choices: [
+      { value: 'translations', hint: 'only the languages you provide text for' },
+      { value: 'model', hint: 'every locale present in the model (pre-2026 behaviour)' },
     ],
   },
   {

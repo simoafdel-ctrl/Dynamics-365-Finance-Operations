@@ -28,7 +28,47 @@ those are called out explicitly below.
 
 ## [Unreleased]
 
-_Nothing released yet._
+### Changed
+- **A label is written only to the languages it has text for.** The default was
+  every locale folder already present in the model — but `LabelResources/` is
+  shared by every label file of a model, so those folders usually belong to
+  *other* label files. One `labels(action="create")` call of 18 labels into a
+  two-language model wrote them into 47 locales and **created 43 label files**
+  (plus their XML descriptors, plus an entry each in the `.rnrproj`, which then
+  failed to load in Visual Studio once the stray files were cleaned up).
+  `LABEL_LANGUAGE_SCOPE=model` (`index.labelLanguageScope`) restores the old
+  fan-out.
+- **`createLabelFileIfMissing` now defaults to `false`.** A label file ships in
+  the deployable package; it is no longer created as a side effect of writing a
+  label. The call fails instead and names the label files the model *does* have.
+- **The "does this label file exist?" check actually looks for the file.** It
+  tested whether the model had any locale FOLDER, which is true of every model
+  with a sibling label file — so a typo'd or invented `labelFileId` created a
+  brand new label file inside a populated model without tripping the guard.
+- **`naming.extensionStyle` defaults to `prefix-first`, and `setup` writes it.**
+  It is an advanced setting, so the wizard only asked for it inside the advanced
+  section; otherwise it never reached the config file, `EXTENSION_NAMING_STYLE`
+  stayed unset, and the runtime fell back to the Microsoft prefix-infix style.
+  Two installs of the same team produced two different names for the same
+  extension. The runtime fallback is unchanged (`prefix`) — this is an
+  installation default, visible and editable in the config file.
+
+### Fixed
+- **The prefix a validator suggested was not the prefix the writer applied.**
+  `checkObjectNaming` suggested `${prefix}${name}`, dropping the trailing
+  underscore of an underscore-style prefix, while the write path keeps it. On
+  the same screen: `Final name : CON_QualityTier` next to
+  `→ Prefixed name: CONQualityTier`. An agent that followed the suggestion
+  wrote a different object from one that followed the prediction.
+- **`prefix-first` was invisible to everything that reports naming.**
+  `get_workspace_info` printed the `prefix`-style samples
+  (`CustTableCon_Extension · CustTable.ConExtension`) while the writer produced
+  `CON_CustTable_Extension · CustTable.ContosoRobotics`, and `validate_object_naming`
+  announced `Extension Style: prefix`. Those samples are the first thing an
+  agent reads, so it planned every name against names that were never written.
+- **The system instructions say what to do about label files**: never create
+  one, write into the model's existing file, ask when several exist, and write
+  only the requested languages.
 
 ---
 

@@ -71,8 +71,10 @@ export const CreateLabelArgsSchema = z.object({
       'and the label file still lives in the model directory.',
     )
     .describe(
-      'Label file ID to add the label to (e.g. ContosoExt). Must exist in the model, or be creatable ' +
-      '(createLabelFileIfMissing=true, default). ⛔ For a NEW label file this ID is the MODEL name — ' +
+      'Label file ID to add the label to (e.g. ContosoExt). ⛔ It must be a label file the model ' +
+      'ALREADY has — creating one is opt-in (createLabelFileIfMissing=true) because a stray label ' +
+      'file ships in the deployable package and is hard to spot. When the model has several and the ' +
+      'request does not name one, ASK which one rather than guessing. ⛔ For a NEW label file this ID is the MODEL name — ' +
       'never the bare EXTENSION_PREFIX (e.g. use "ContosoExt", not "Con"). The file lives inside the ' +
       'model directory regardless of prefix, so an ID that is not the model name will not resolve. ' +
       'When the model name itself is not a valid identifier (e.g. "fm-mcp"), the label file ID CANNOT ' +
@@ -96,13 +98,12 @@ export const CreateLabelArgsSchema = z.object({
     .array(z.string())
     .optional()
     .describe(
-      'Restrict which language .label.txt files are written/created. ' +
-        'When provided, the label is created ONLY for these locales (e.g. ["en-US"] for an ' +
-        'English-only customization), creating the folders if needed. This avoids leaking the ' +
-        'label into locales that exist only because OTHER label files in the same model ship ' +
-        'them (LabelResources is shared across the whole model). ' +
-        'When omitted or empty, the label is written to every language folder already present ' +
-        'in the model (default behavior).',
+      'Which language .label.txt files are written/created, when it must differ from the ' +
+        'translations. By DEFAULT the label is written to exactly the languages carried by ' +
+        '`translations` and to no others — LabelResources/ is shared by the whole model, so the ' +
+        'locales already on disk are mostly other label files\' business. Pass this only to write ' +
+        'a locale you have no translation for (it then falls back to the en-US text). ' +
+        'LABEL_LANGUAGE_SCOPE=model restores the old "every locale in the model" behaviour.',
     ),
   description: z
     .string()
@@ -136,11 +137,13 @@ export const CreateLabelArgsSchema = z.object({
   createLabelFileIfMissing: z
     .boolean()
     .optional()
-    .default(true)
+    .default(false)
     .describe(
-      'If true (default) and the AxLabelFile does not exist yet, create it with the provided ' +
-        'translations. A wrong-path guard still fails loudly when the model directory is not found, ' +
-        'so this never produces a phantom label file. Set to false to fail fast instead of creating.',
+      'Create the AxLabelFile when it does not exist yet. OFF by default: a label file is a ' +
+        'deliverable of its own — it ships in the deployable package, carries an XML descriptor per ' +
+        'language and lands in the .rnrproj — so it is never created as a side effect of writing a ' +
+        'label. When the file is missing the call fails and names the label files the model does ' +
+        'have; use one of those, or set this to true once you have confirmed a new file is wanted.',
     ),
   allowExtensionLabelFile: z
     .boolean()
@@ -187,6 +190,67 @@ export const CreateLabelArgsSchema = z.object({
 });
 
 // Helpers
+
+/**
+ * True when the operator wants a label written to EVERY locale the model already
+ * carries, rather than to the languages its translations name.
+ *
+ * Off unless LABEL_LANGUAGE_SCOPE=model. LabelResources/ is shared by every label
+ * file of a model, so "the locales already present" is not a statement about the
+ * file being written: a two-language model whose sibling label file ships 47
+ * locales had 43 label files created for it by one call under the old default.
+ */
+function languageScopeIsModel(): boolean {
+  return process.env.LABEL_LANGUAGE_SCOPE?.trim().toLowerCase() === 'model';
+}
+
+/**
+ * Whether the model already ships this label file.
+ *
+ * "Does this label file exist?" cannot be answered by the presence of locale
+ * FOLDERS: LabelResources/ belongs to the model, not to one label file, so a model
+ * with a single label file still has 47 locale folders. Only a
+ * `<Id>.<locale>.label.txt` inside one of them proves the file is there — checked
+ * with a targeted access() per locale rather than by listing the directories,
+ * which is both cheaper and immune to a locale folder that holds other files.
+ */
+async function labelFileExistsInModel(
+  labelResourcesDir: string,
+  languages: string[],
+  labelFileId: string,
+): Promise<boolean> {
+  for (const lang of languages) {
+    try {
+      await fs.access(path.join(labelResourcesDir, lang, `${labelFileId}.${lang}.label.txt`));
+      return true;
+    } catch {
+      // Not in this locale — keep looking.
+    }
+  }
+  return false;
+}
+
+/**
+ * The label file IDs a model ships, for the "use one of these instead" message.
+ * Only ever called on the failure path, so the directory listing it costs is paid
+ * by the call that is already refusing to write.
+ */
+async function listModelLabelFileIds(labelResourcesDir: string, languages: string[]): Promise<Set<string>> {
+  const ids = new Set<string>();
+  for (const lang of languages) {
+    let entries: string[] = [];
+    try {
+      entries = await fs.readdir(path.join(labelResourcesDir, lang));
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const match = /^(.+?)\.[^.]+\.label\.txt$/i.exec(entry);
+      if (match) ids.add(match[1]);
+    }
+  }
+  return ids;
+}
 
 /** Parse a .label.txt file into an ordered map: labelId → { text, comment } */
 function parseLabelMap(content: string): Map<string, { text: string; comment?: string }> {
@@ -957,17 +1021,31 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
     // 3. Determine the target language set and create any missing folders.
     //    A brand-new label file (no locales at all anywhere in the model) is still guarded
     //    by createLabelFileIfMissing regardless of which mode we're in.
-    const labelFileMissing = discoveredLanguages.length === 0;
+    // A model with locale folders but no <labelFileId>.<locale>.label.txt in them does
+    // NOT have this label file: the folders belong to its SIBLING label files. Testing
+    // only for "no locales at all" let a typo'd or invented labelFileId create a brand
+    // new label file inside an existing model without ever tripping the guard.
+    const labelFileMissing =
+      discoveredLanguages.length === 0 ||
+      !(await labelFileExistsInModel(labelResourcesDir, discoveredLanguages, labelFileId));
     if (labelFileMissing && !createLabelFileIfMissing) {
+      const known = [...(await listModelLabelFileIds(labelResourcesDir, discoveredLanguages))].sort((a, b) =>
+        a.localeCompare(b),
+      );
       return {
         content: [
           {
             type: 'text',
             text:
-              `AxLabelFile "${labelFileId}" not found in model "${model}" ` +
-              `(expected path: ${labelResourcesDir}).\n\n` +
-              `Set createLabelFileIfMissing=true to create the label file from scratch, ` +
-              `or use d365fo_file(action="create") to scaffold the label file first.`,
+              `AxLabelFile "${labelFileId}" does not exist in model "${model}" ` +
+              `(looked in ${labelResourcesDir}).\n\n` +
+              (known.length > 0
+                ? `Label files this model DOES have: ${known.join(', ')}.\n` +
+                  `Use one of them — a new label file ships in the deployable package and is ` +
+                  `rarely what a label write intends. If the request does not say which file to ` +
+                  `use and several exist, ASK before writing.\n\n`
+                : `This model has no label file yet.\n\n`) +
+              `To create "${labelFileId}" anyway, re-run with createLabelFileIfMissing=true.`,
           },
         ],
         isError: true,
@@ -1036,9 +1114,11 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
         await createLangDirectory(lang);
         existingLanguages.push(lang);
       }
-    } else {
-      // No explicit scope — default behavior: write to every language folder that already
-      // exists in the model, plus any new languages supplied via translations.
+    } else if (languageScopeIsModel()) {
+      // LABEL_LANGUAGE_SCOPE=model — the pre-2026 behaviour: write to every language
+      // folder that already exists in the model, plus any new languages supplied via
+      // translations. Opt-in, because LabelResources/ is shared by every label file of
+      // the model: "already exists" usually means "some OTHER label file ships it".
       existingLanguages = [...discoveredLanguages];
       const existingSet = new Set(existingLanguages.map(l => l.toLowerCase()));
       for (const [lang] of translationMap) {
@@ -1046,6 +1126,22 @@ export async function createLabelTool(request: CallToolRequest, context: XppServ
           await createLangDirectory(lang);
           existingLanguages.push(lang);
         }
+      }
+    } else {
+      // Default: the languages the caller actually wrote a translation for, and no
+      // others. Spraying a label across every locale present in LabelResources/ wrote
+      // 18 labels into 47 locales of a 2-language model and CREATED 43 label files
+      // nobody asked for — each one also landing in the .rnrproj, which then failed to
+      // load once they were cleaned up. A label goes where its text goes.
+      const discoveredMap = new Map(discoveredLanguages.map(l => [l.toLowerCase(), l]));
+      existingLanguages = [];
+      for (const [lang] of translationMap) {
+        const onDisk = discoveredMap.get(lang.toLowerCase());
+        if (!onDisk) {
+          await createLangDirectory(lang);
+          discoveredMap.set(lang.toLowerCase(), lang);
+        }
+        existingLanguages.push(onDisk ?? lang);
       }
     }
 

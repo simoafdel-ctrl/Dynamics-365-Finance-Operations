@@ -79,9 +79,17 @@ export async function validateObjectNamingTool(request: CallToolRequest, context
       output += `Model Prefix: ${prefix}${modelName ? ` (${modelPart}${origin})` : ''}\n`;
     }
     if (isExtension) {
-      output += useModelName
-        ? `Extension Style: model-name (token = ${modelTokenPhrase})\n`
-        : `Extension Style: prefix (token = "${extensionInfix}")\n`;
+      // prefix-first uses a DIFFERENT token on each side — the prefix leads a CoC
+      // class, the model name closes an element extension — so a single "token ="
+      // line cannot describe it. Printing "prefix (token = Con)" here, which is
+      // what the style fell through to, named neither of the two names the writer
+      // actually produces.
+      output +=
+        namingStyle === 'prefix-first'
+          ? `Extension Style: prefix-first (class → ${prefix}_{Base}_Extension · element → {Base}.${modelName || '{Model}'})\n`
+          : useModelName
+            ? `Extension Style: model-name (token = ${modelTokenPhrase})\n`
+            : `Extension Style: prefix (token = "${extensionInfix}")\n`;
       if (namingStyle === 'model-name' && !modelName) {
         output += `  ⚠ EXTENSION_NAMING_STYLE=model-name but no model name could be resolved — validated structure only. Pass modelName to validate the extension token.\n`;
       }

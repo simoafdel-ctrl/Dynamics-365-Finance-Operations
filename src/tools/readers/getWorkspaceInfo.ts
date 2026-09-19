@@ -184,20 +184,34 @@ export async function getWorkspaceInfoTool(
   // path embeds — the model name with non-identifier characters removed (#892). The model
   // name itself stays raw everywhere else here: the write path on disk is joined with it.
   const writeModelToken = writeModel ? normalizeModelToken(writeModel) : '';
-  const sampleClassExt = extNamingStyle === 'model-name' && writeModelToken
-    ? `CustTable_${writeModelToken}_Extension`
-    : `CustTable${extInfix}_Extension`;
-  const sampleElemExt = extNamingStyle === 'model-name' && writeModelToken
-    ? `CustTable.${writeModelToken}`
-    : `CustTable.${extInfix}Extension`;
+  // prefix-first: the prefix LEADS a CoC class and the model name closes an element
+  // extension. Falling through to the 'prefix' samples here printed
+  // "CustTableCon_Extension · CustTable.ConExtension" while the writer produced
+  // "CON_CustTable_Extension · CustTable.ContosoRobotics" — and these two samples are the
+  // first thing an agent reads, so it planned every name against them.
+  const prefixFirstToken = effectivePrefix.replace(/_+$/, '');
+  const sampleClassExt =
+    extNamingStyle === 'prefix-first'
+      ? `${prefixFirstToken}_CustTable_Extension`
+      : extNamingStyle === 'model-name' && writeModelToken
+        ? `CustTable_${writeModelToken}_Extension`
+        : `CustTable${extInfix}_Extension`;
+  const sampleElemExt =
+    extNamingStyle === 'prefix-first'
+      ? `CustTable.${writeModelToken || prefixFirstToken}`
+      : extNamingStyle === 'model-name' && writeModelToken
+        ? `CustTable.${writeModelToken}`
+        : `CustTable.${extInfix}Extension`;
   if (diagnostics) {
     lines.push(
       `## Extension Naming`,
       ``,
       `EXTENSION_NAMING_STYLE: ${process.env.EXTENSION_NAMING_STYLE?.trim() || '(not set → "prefix")'}`,
-      extNamingStyle === 'model-name'
-        ? `✅ model-name style — extension token is the MODEL NAME (Visual Studio default).`
-        : `ℹ️  prefix style (default) — extension token is the EXTENSION_PREFIX infix.`,
+      extNamingStyle === 'prefix-first'
+        ? `✅ prefix-first style — the PREFIX leads a CoC class, the MODEL NAME closes an element extension.`
+        : extNamingStyle === 'model-name'
+          ? `✅ model-name style — extension token is the MODEL NAME (Visual Studio default).`
+          : `ℹ️  prefix style — extension token is the EXTENSION_PREFIX infix.`,
       `  • Extension class  → ${sampleClassExt}`,
       `  • Element extension → ${sampleElemExt}`,
       `  ⚠️  Pass the BASE object name (e.g. "CustTable") to d365fo_file(action="create") and let the tool apply the token — any infix you embed will be normalised to the above.`,

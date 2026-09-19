@@ -90,8 +90,9 @@ export async function labelsTool(request: CallToolRequest, context: XppServerCon
           type: 'text',
           text:
             `❌ labels: "${rawArgs.action}" is not a labels action — d365fo_file has no "label-file" object type. ` +
-            `A new AxLabelFile is created automatically by labels(action="create", createLabelFileIfMissing=true ` +
-            `[default]) as a side effect of adding its first label. The label file's ID (labelFileId) is the ` +
+            `A new AxLabelFile is created by labels(action="create", createLabelFileIfMissing=true) — NOT the ` +
+            `default, and only when a new file is genuinely wanted: write into the model's existing label file ` +
+            `otherwise, and ask which one when several exist. The label file's ID (labelFileId) is the ` +
             `model name (e.g. "ContosoExt") — NEVER the bare EXTENSION_PREFIX. Example:\n` +
             `  labels(action="create", labelId="EquipmentName", labelFileId="ContosoExt", model="ContosoExt", ` +
             `translations=[{language:"en-US", text:"Equipment name"}])`,

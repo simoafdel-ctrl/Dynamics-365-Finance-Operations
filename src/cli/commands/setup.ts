@@ -226,6 +226,29 @@ function solutionsPath(store: SettingsStore): string {
 async function configureNaming(store: SettingsStore): Promise<void> {
   p.log.step('Naming');
   await askSettings(store, settingsInSection('naming', 'basic'));
+  seedHouseExtensionStyle(store);
+}
+
+/**
+ * Write the house extension-naming convention into the config when nothing sets it.
+ *
+ * naming.extensionStyle is an 'advanced' setting, so the wizard only asks for it
+ * when the operator walks into the advanced section. Otherwise it never reaches the
+ * config file, EXTENSION_NAMING_STYLE stays unset, and the runtime falls back to the
+ * Microsoft prefix-infix style — so every machine depended on someone remembering to
+ * set the variable by hand, and two installs of the same team produced two different
+ * names for the same extension. Seeding the registry default makes the convention the
+ * install default while leaving it visible and editable in the config file; an
+ * operator who already chose a style keeps it.
+ */
+function seedHouseExtensionStyle(store: SettingsStore): void {
+  const style = setting('naming.extensionStyle');
+  if (readSetting(store, style) !== undefined) return;
+  writeSetting(store, style, style.default);
+  p.log.info(
+    `Extension naming: ${String(style.default)} — CON_CustTable_Extension for a CoC class, ` +
+      `CustTable.<Model> for an element extension. Change it under Advanced → naming.`,
+  );
 }
 
 async function configureIndex(store: SettingsStore): Promise<void> {

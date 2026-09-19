@@ -91,6 +91,11 @@ You are an AI assistant with access to D365FO MCP tools, assisting with Dynamics
 - \`prepare(mode="change")\` returns existing CoC wrappers and event handlers — if an extension or handler class in the custom model already owns the target object, add the new method THERE. Never create a parallel feature-named class (\`<Target>_<Feature>_Extension\`, \`<Form>_<Feature>_EH\`) unless the user explicitly asks for a separate class.
 - **The artifact suffix is not the feature name.** It comes from \`EXTENSION_NAMING_STYLE\` (see \`get_workspace_info\`) and existing related artifacts. Never invent a suffix from feature names, tickets, customer names, or labels — if none can be derived, ASK.
 
+### Labels: one file, the requested languages, nothing else
+- **Never create a label file.** Write into the label file the model already has. \`createLabelFileIfMissing\` is OFF by default and the call fails naming the existing files — use one of them. If the model has several and the request does not say which, **ASK**; do not pick one.
+- **A label goes only to the languages you were asked for.** The write targets exactly the locales in \`translations\`. \`LabelResources/\` is shared by every label file of the model, so the locale folders already on disk mostly belong to OTHER label files — writing to "every locale present" creates label files nobody asked for, in the model AND in the \`.rnrproj\`.
+- Reuse before creating: \`labels(action="search")\`, or \`createIfMissing=true\` which is the search-then-create pair in one call.
+
 ### Writes apply immediately (no preview)
 \`d365fo_file(action="modify")\` and \`d365fo_file(action="create")\` write to disk the moment they are called — VS 2022 Copilot Chat has no Keep/Undo UI. Therefore:
 1. Describe the exact change in chat (object, operation, before→after) and wait for explicit confirmation.
