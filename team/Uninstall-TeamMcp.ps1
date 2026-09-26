@@ -197,7 +197,7 @@ if ($running.Count -gt 0) {
     foreach ($p in $running) { Write-Warn "PID $($p.ProcessId): $($p.CommandLine)" }
     if (-not $DryRun) {
         Stop-Uninstall "$($running.Count) MCP server process(es) are still running." @(
-            'Close Claude Code and Visual Studio - each one starts its own server.',
+            'Close VS Code and Visual Studio - Claude Code and Copilot each start their own server.',
             'They hold the bridge and the index open, so removing them would fail halfway.',
             'Then run this script again.'
         )
@@ -355,6 +355,6 @@ Write-Host ''
 Write-Host '  Worth knowing:' -ForegroundColor White
 Write-Host '    - Your D365FO metadata was not touched. Models, projects and the AOT are as they were.'
 Write-Host "    - Backups were left as <name>.bak-$($script:Stamp) next to each file that had one."
-Write-Host '    - Restart Claude Code and Visual Studio so they stop trying to start the server.'
+Write-Host '    - Restart VS Code and Visual Studio so they stop trying to start the server.'
 if ($KeepIndex) { Write-Host '    - The index was kept, so a reinstall skips the long step.' }
 Write-Host ''

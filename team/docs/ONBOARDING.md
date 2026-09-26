@@ -1,8 +1,9 @@
 # Installing on a new dev VM — step by step
 
-Follow this top to bottom on a fresh D365FO development VM. At the end, Claude Code and GitHub
-Copilot both drive the patched MCP server with our team conventions already applied: naming,
-mandatory best-practice checks, English XML documentation, the right label languages.
+Follow this top to bottom on a fresh D365FO development VM. At the end, Claude Code (in VS Code)
+and GitHub Copilot (in Visual Studio) both drive the patched MCP server with our team conventions
+already applied: naming, mandatory best-practice checks, English XML documentation, the right
+label languages.
 
 Budget **45–75 minutes**, nearly all of it waiting: a few minutes on `npm install`, then
 15–45 minutes while the installer indexes your AOT. Both phases print little or nothing for long
@@ -16,11 +17,13 @@ prints them back to you.
 
 ## Before you start — 5 minutes
 
-Run these four commands in PowerShell and note what you get:
+Run these commands in PowerShell and note what you get:
 
 ```powershell
 node --version                                      # want v24 or higher
 git --version                                       # any recent version
+code --version                                      # VS Code, 1.94 or higher
+code --list-extensions | Select-String anthropic    # want anthropic.claude-code
 Get-ChildItem C:\,D:\,J:\,K:\ -Filter AosService -ErrorAction SilentlyContinue   # find the AOS drive
 $PSVersionTable.PSVersion                           # 5.1 or 7.x, both fine
 ```
@@ -29,6 +32,8 @@ $PSVersionTable.PSVersion                           # 5.1 or 7.x, both fine
 |---|---|
 | **Node.js 24+** | the server declares `node >= 24.0.0`; older versions fail the build, not the install |
 | **Git** | used to clone the fork |
+| **VS Code 1.94+ with the Claude Code extension** | where you work with Claude, see [Step 7](#step-7--connect-the-two-clients). The extension carries its own copy of Claude Code: no separate CLI to install |
+| **A Claude account** | the extension asks you to sign in on first use (Team/Enterprise, Pro/Max or Console). Ask the project lead which one the team uses |
 | **A traditional environment** — a local `AosService\PackagesLocalDirectory` | UDE is not supported yet, see [ARCHITECTURE.md](ARCHITECTURE.md#scope-traditional-only) |
 | **A custom model already created** | the server needs somewhere to write; create it in Visual Studio first if absent |
 | **~15 GB free** on some drive | the extraction is ~1.5 GB of JSON but lands in ~190 000 tiny files, so it occupies nearer 10 GB on a volume with large clusters; the index adds 2–3 GB. The installer picks the roomiest drive and tells you which |
@@ -38,22 +43,34 @@ Nothing else. You do **not** need Visual Studio open, and you do not need the AO
 
 ---
 
-## Step 1 — Install Node.js and Git, if missing
+## Step 1 — Install Node.js, Git and VS Code, if missing
 
-Skip if both commands above answered.
+Skip whatever the commands above already answered.
 
 ```powershell
 winget install OpenJS.NodeJS.LTS
 winget install Git.Git
+winget install Microsoft.VisualStudioCode
 ```
 
-On a Windows Server VM without winget, take the installers from [nodejs.org](https://nodejs.org)
-and [git-scm.com](https://git-scm.com/download/win).
+On a Windows Server VM without winget, take the installers from [nodejs.org](https://nodejs.org),
+[git-scm.com](https://git-scm.com/download/win) and
+[code.visualstudio.com](https://code.visualstudio.com/download) (the **User Installer** needs no
+admin rights).
 
 > **Close and reopen PowerShell afterwards.** This is not optional and it is the single most
 > common way this install goes wrong: your current session still holds the old `PATH`, so
-> `node` or `git` will not be found even though they are installed. Reopen, re-run
+> `node`, `git` or `code` will not be found even though they are installed. Reopen, re-run
 > `node --version`, and only continue once it answers.
+
+Then add the Claude Code extension to VS Code:
+
+```powershell
+code --install-extension anthropic.claude-code
+```
+
+Or from VS Code itself: `Ctrl+Shift+X`, search **Claude Code** (publisher Anthropic), Install.
+You sign in later, in Step 7 — nothing else to set up now.
 
 ---
 
@@ -179,7 +196,8 @@ files), then loaded into a SQLite symbol database. The second phase prints a per
 model, largest first, so `Foundation` sitting at `[1%]` for a while is normal.
 
 **Nothing else may hold the database while this runs.** The build needs exclusive access, so
-close Claude Code and Visual Studio first — each one starts its own MCP server. The installer
+close VS Code and Visual Studio first — Claude Code in VS Code and Copilot in Visual Studio
+each start their own MCP server. The installer
 checks and stops with that instruction rather than starting an hour of work it cannot finish.
 
 On a re-run the installer finds the index already populated and skips straight past it. Two
@@ -229,8 +247,9 @@ if yours closes at the end instead, see
   Install complete.
 
   Next, once each:
-    1. Claude Code: open C:\Users\you\source\repos, run 'claude', approve the local MCP server
-       when it shows "Pending approval". Then ask it to call get_workspace_info.
+    1. VS Code: open the folder  code "C:\Users\you\source\repos"
+       In the Claude Code panel (spark icon), approve the d365fo-mcp-tools server when
+       asked, then ask it to call get_workspace_info. /mcp shows the server status.
     2. Visual Studio: restart it so Copilot picks up the new .mcp.json.
     3. Prove the convention on a throwaway object - trust the file name on disk,
        not what the assistant says it created:
@@ -262,23 +281,56 @@ always safe.
 
 ## Step 7 — Connect the two clients
 
-### Claude Code
+### Claude Code, in VS Code
+
+Work with Claude from **VS Code**, not from the `claude` command line in a PowerShell window.
+Same Claude, same MCP server, same rules — but you see the files it touches, click the file
+references it gives you to jump to the line, review each change as a diff before accepting it,
+paste a screenshot or an error straight into the chat, and keep a terminal in the same window.
+No more copy-pasting output between a console and the chat.
+
+**1. Open your projects folder.** This is the equivalent of the `cd` you would do before running
+`claude`: whatever folder VS Code has open is where Claude works. From PowerShell:
 
 ```powershell
-cd <your projects folder>
-claude
+code "C:\Users\you\source\repos"
 ```
 
-The first time, Claude Code shows the local MCP server as **Pending approval** — approve it.
-This happens once per machine.
+or in VS Code: **File > Open Folder…** and pick the projects folder you gave the installer.
 
-Then verify it is really live. Ask Claude:
+Open **that folder itself** — the one holding `.mcp.json` and `CLAUDE.md` — not a solution
+subfolder and not your whole drive: that is where Claude Code finds the MCP server and the team
+rules. If VS Code asks *Do you trust the authors of the files in this folder?*, answer **Yes, I
+trust the authors** — in an untrusted folder the MCP server never starts.
+
+To switch to another projects folder later, **File > Open Recent** or `code "<other folder>"`
+again. Each folder keeps its own Claude conversations.
+
+**2. Open the Claude Code panel** — the spark icon in the left Activity Bar (or `Ctrl+Shift+P` >
+*Claude Code*). The first time, a browser window opens so you can sign in with your Claude
+account.
+
+**3. Approve the MCP server.** On first use Claude Code asks whether to use the project's MCP
+server `d365fo-mcp-tools` — approve it. This happens once per folder. Type `/mcp` in the panel at
+any time to see its status:
+
+| `/mcp` shows | Meaning |
+|---|---|
+| `✔ Connected` | ready |
+| `⏸ Pending approval` | not approved yet, or the folder is not trusted — approve it in the same dialog |
+| `✘ Failed` | the server could not start — see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-mcp-server-does-not-appear-in-the-client) |
+
+**4. Check it is really live.** Ask Claude:
 
 > *call get_workspace_info*
 
 You want to see your `Model`, your `Prefix`, and `Env: traditional`. If the call fails the server
 is not connected; if the answer opens with a configuration problem, read it — it states what is
 wrong.
+
+> Prefer the terminal anyway? The CLI works the same way — `cd` into the projects folder and run
+> `claude` — but it is a separate install: the copy inside the extension is private to it. See
+> the [Claude Code docs](https://code.claude.com/docs/en/vs-code).
 
 ### Visual Studio / Copilot
 
@@ -298,7 +350,8 @@ different AI clients have reported the wrong extension name while the server was
 right one — an assistant describes what it expects, which is not always what happened.
 
 Ask the assistant to create a CoC class extension on a table you do not care about, say
-`CustTable`. Then look at what actually landed:
+`CustTable`. Then look at what actually landed — **yourself**, in VS Code's integrated terminal
+(`` Ctrl+` ``), rather than asking Claude to check its own work:
 
 ```powershell
 Get-ChildItem 'K:\AosService\PackagesLocalDirectory\ABC\ABC' -Recurse -Filter '*CustTable*Extension*' |
@@ -358,7 +411,7 @@ instructed to do, and what you should hold it to:
    - **Every search comes back empty, even for a standard table** → the index was never built.
      Close your editors and run `Install-TeamMcp.ps1 -ForceIndex`.
    - **`database is locked` during the index** → an editor is still running its own MCP server.
-     Close Claude Code and Visual Studio, then re-run.
+     Close VS Code and Visual Studio, then re-run.
 
 ---
 
@@ -408,7 +461,7 @@ nothing:
 C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1 -DryRun
 ```
 
-Then, with Claude Code and Visual Studio closed:
+Then, with VS Code and Visual Studio closed:
 
 ```powershell
 C:\d365fo-mcp-patched\team\Uninstall-TeamMcp.ps1
@@ -439,8 +492,8 @@ What it removes:
 were — the installer only ever wrote to its own folders. Every file it removes is backed up
 beside itself as `<name>.bak-<timestamp>` first.
 
-Afterwards, restart Claude Code and Visual Studio so they stop trying to launch a server that is
-no longer there.
+Afterwards, restart VS Code and Visual Studio so they stop trying to launch a server that is no
+longer there.
 
 ---
 

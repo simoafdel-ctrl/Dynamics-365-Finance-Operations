@@ -181,7 +181,7 @@ node -e "const {DatabaseSync}=require('node:sqlite'); const p=process.env.LOCALA
 
 A healthy full-AOT index answers with over a million symbols and the file is 2–3 GB.
 
-**Fix.** Close Claude Code and Visual Studio — each runs its own MCP server, and the build needs
+**Fix.** Close VS Code and Visual Studio — each runs its own MCP server, and the build needs
 exclusive access to the database — then:
 
 ```powershell
@@ -275,14 +275,25 @@ somewhere other than the patched `dist\index.js`. To check by hand:
 
 ## The MCP server does not appear in the client
 
-### Claude Code
+### Claude Code (VS Code)
 
-- `Pending approval (run 'claude' to approve)` — expected on first use. Run `claude` in your
-  projects folder and approve the local server. Once.
-- Nothing at all: Claude Code reads the `.mcp.json` of the folder you opened, walking up the
-  tree. If your work lives on `K:\Projects` and the only `.mcp.json` is in
-  `C:\Users\you`, it will **never** be found — different drive, no common parent. This is why
-  the installer writes both locations. Confirm one sits in the folder you actually open.
+Type `/mcp` in the Claude Code panel first — it names the state the server is in.
+
+- `⏸ Pending approval` — expected on first use: approve `d365fo-mcp-tools` in that dialog. Once
+  per folder. If it stays pending, VS Code is in Restricted Mode: the folder is not trusted.
+  `Ctrl+Shift+P` > *Workspaces: Manage Workspace Trust* > **Trust**, then reopen the panel.
+- The server is not listed at all — VS Code has the **wrong folder** open. Claude Code reads the
+  `.mcp.json` of the folder you opened, walking up the tree. Open the projects folder itself
+  (`code "<projects folder>"`), the one that holds `.mcp.json` and `CLAUDE.md` — not a solution
+  subfolder elsewhere, not a whole drive. If your work lives on `K:\Projects` and the only
+  `.mcp.json` is in `C:\Users\you`, it will **never** be found — different drive, no common
+  parent. This is why the installer writes both locations.
+- `✘ Failed` — the server started and died. Run the audit,
+  `C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1 -DryRun`: it starts the same bridge and reads
+  the same index without writing anything, and its failing line points to the entry above that
+  applies (packages path, bridge, index).
+- After a re-install or any `.mcp.json` change, run *Developer: Reload Window* (`Ctrl+Shift+P`)
+  so the panel starts the new server.
 
 ### Copilot in Visual Studio
 

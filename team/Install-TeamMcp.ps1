@@ -834,7 +834,7 @@ if ($DryRun) {
         Write-Ok "index already populated ($symbolsNow symbols) - pass -ForceIndex to rebuild"
     } elseif ($dbLocked) {
         Stop-Install 'The metadata database is held by a running MCP server, so it cannot be rebuilt.' @(
-            'Close Claude Code and Visual Studio (both start their own server), then run this script again.',
+            'Close VS Code and Visual Studio (Claude Code and Copilot each start their own server), then run this script again.',
             'The database build needs exclusive access: SQLite cannot grant it while a server holds the file.'
         )
     } else {
@@ -1005,8 +1005,9 @@ if ($DryRun) {
 Write-Host '  Install complete.' -ForegroundColor Green
 Write-Host ''
 Write-Host '  Next, once each:' -ForegroundColor White
-Write-Host "    1. Claude Code: open $WorkspacePath, run 'claude', approve the local MCP server"
-Write-Host '       when it shows "Pending approval". Then ask it to call get_workspace_info.'
+Write-Host "    1. VS Code: open the folder  code `"$WorkspacePath`""
+Write-Host '       In the Claude Code panel (spark icon), approve the d365fo-mcp-tools server when'
+Write-Host '       asked, then ask it to call get_workspace_info. /mcp shows the server status.'
 Write-Host '    2. Visual Studio: restart it so Copilot picks up the new .mcp.json.'
 Write-Host '    3. Prove the convention on a throwaway object - trust the file name on disk,'
 Write-Host '       not what the assistant says it created:'
