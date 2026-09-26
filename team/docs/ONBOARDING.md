@@ -199,7 +199,9 @@ install reports `[ OK ] symbol index is populated`, and the next `-ForceIndex` w
 
 ## Step 6 — Read the report
 
-The install ends with a verdict, one line per check:
+The install ends with a verdict, one line per check. The PowerShell window stays open on it —
+if yours closes at the end instead, see
+[TROUBLESHOOTING.md](TROUBLESHOOTING.md#the-powershell-window-closes-at-the-end-and-the-report-is-never-seen).
 
 ```
 === Report
@@ -219,8 +221,23 @@ The install ends with a verdict, one line per check:
   Environment
     model      : ABC
     prefix     : ABC_
+    packages   : K:\AosService\PackagesLocalDirectory
+    workspace  : C:\Users\you\source\repos
+    labels     : en-US, fr-CA
     naming     : ABC_CustTable_Extension  |  CustTable.ABC
+
+  Install complete.
+
+  Next, once each:
+    1. Claude Code: open C:\Users\you\source\repos, run 'claude', approve the local MCP server
+       when it shows "Pending approval". Then ask it to call get_workspace_info.
+    2. Visual Studio: restart it so Copilot picks up the new .mcp.json.
+    3. Prove the convention on a throwaway object - trust the file name on disk,
+       not what the assistant says it created:
+         Get-ChildItem 'K:\AosService\PackagesLocalDirectory\ABC\ABC' -Recurse -Filter '*CustTable*Extension*'
 ```
+
+The three "Next" steps are Steps 7 and 8 below.
 
 **Every line must read `[ OK ]`.** These are not cosmetic — they run the naming convention
 against the freshly compiled code, start the real bridge binary against your real packages path,

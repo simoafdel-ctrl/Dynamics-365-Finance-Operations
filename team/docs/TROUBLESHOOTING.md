@@ -374,6 +374,30 @@ Remove-Item 'C:\path\to\the\broken\clone' -Recurse -Force
 Remove-Item $empty -Recurse -Force
 ```
 
+## The PowerShell window closes at the end, and the report is never seen
+
+**Symptom:** the install runs its full course, the index is built, and the window disappears on
+its own right at the end — no `=== Report`, no `Install complete`.
+
+`irm | iex` does not run `bootstrap.ps1` as a script: it runs its text inside your own
+PowerShell session. An `exit` in that text therefore closes the session, and older versions of
+the bootstrap ended with one. The report was printed and the window closed a millisecond later;
+a `BOOTSTRAP STOPPED` message vanished the same way.
+
+The current bootstrap has no `exit` on that path, so the window stays open on the report,
+whether it passed or failed. `irm | iex` always fetches the latest bootstrap, so the next run
+gets the fix. To read the verdict of an install that already ran, run the installer again and
+press Enter at the three questions to keep your answers. It finds the build, the bridge and the
+index in place, skips them, rewrites nothing that is unchanged, and ends on the full report in a
+couple of minutes:
+
+```powershell
+C:\d365fo-mcp-patched\team\Install-TeamMcp.ps1
+```
+
+After an install, `$LASTEXITCODE` holds the result: `0` all checks passed, `1` something failed
+or stopped.
+
 ## npm install or npm run build fails
 
 - **`npm` is not recognised.** Node was installed in another session. Close and reopen

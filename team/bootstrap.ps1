@@ -20,7 +20,19 @@
 # Do NOT use the install.ps1 at the root of this repository: that one belongs to
 # upstream and installs the package from npm, which does NOT carry the prefix-first
 # patch. Naming would silently fall back to the default style.
+#
+# NO BARE `exit` IN THIS FILE (the one at the very bottom is guarded, and never runs under
+# iex). `irm | iex` runs this text inside the developer's own
+# PowerShell session, not as a script, so an `exit` here closes the console window itself.
+# That is exactly how the installer's final report used to vanish the instant it was
+# printed - and how every BOOTSTRAP STOPPED message vanished with it. Stops are thrown and
+# caught at the bottom instead, and the result travels in $LASTEXITCODE.
+#
+# The whole body runs in a child scope (& { }) for the same reason: without it, the
+# 'Stop' error preference and every helper function below would stay behind in the
+# developer's session after the install.
 
+& {
 $ErrorActionPreference = 'Stop'
 $ProgressPreference    = 'SilentlyContinue'
 
@@ -28,13 +40,18 @@ $RepoUrl = 'https://github.com/simoafdel-ctrl/Dynamics-365-Finance-Operations.gi
 $TargetDir = $env:D365FO_MCP_DIR
 if (-not $TargetDir) { $TargetDir = 'C:\d365fo-mcp-patched' }
 
+# Thrown by Fail and recognised by the catch at the bottom, so a stop that has already
+# printed its message is not reported a second time as an unexpected error.
+$StopMarker = 'D365FO-BOOTSTRAP-STOPPED'
+
 function Write-Head([string]$m) { Write-Host ''; Write-Host "=== $m" -ForegroundColor Cyan }
 function Write-Step([string]$m) { Write-Host "  -> $m" }
 function Write-Ok  ([string]$m) { Write-Host "  +  $m" -ForegroundColor Green }
 function Fail([string]$m, [string[]]$Hints) {
     Write-Host ''; Write-Host 'BOOTSTRAP STOPPED' -ForegroundColor Red; Write-Host "  $m" -ForegroundColor Red
     if ($Hints) { Write-Host ''; foreach ($h in $Hints) { Write-Host "  - $h" -ForegroundColor Yellow } }
-    Write-Host ''; exit 1
+    Write-Host ''
+    throw $StopMarker
 }
 
 # The repository carries deep paths (eval/goldens/... with long file names). Windows caps
@@ -98,6 +115,8 @@ function Invoke-Clone([string]$Dir) {
         )
     }
 }
+
+try {
 
 Write-Host ''
 Write-Host 'D365FO MCP server - team bootstrap' -ForegroundColor White
@@ -186,5 +205,26 @@ if ($env:D365FO_MCP_LANGS)     { $argsMap['LabelLanguages'] = @($env:D365FO_MCP_
 if ($env:D365FO_MCP_YES    -and $env:D365FO_MCP_YES    -ne '0') { $argsMap['Yes']    = $true }
 if ($env:D365FO_MCP_DRYRUN -and $env:D365FO_MCP_DRYRUN -ne '0') { $argsMap['DryRun'] = $true }
 
+# The installer is a script file, so its own `exit` ends the installer only and lands
+# back here with $LASTEXITCODE set - its report stays on screen.
 & $installer @argsMap
-exit $LASTEXITCODE
+
+} catch {
+    # A Fail has already printed its message. Anything else is an unexpected terminating
+    # error, from here or from the installer: show it rather than lose it.
+    if ([string]$_.Exception.Message -ne $StopMarker) {
+        Write-Host ''
+        Write-Host 'BOOTSTRAP STOPPED - unexpected error' -ForegroundColor Red
+        Write-Host "  $($_.Exception.Message)" -ForegroundColor Red
+        if ($_.InvocationInfo -and $_.InvocationInfo.PositionMessage) {
+            Write-Host $_.InvocationInfo.PositionMessage -ForegroundColor DarkGray
+        }
+        Write-Host ''
+    }
+    $global:LASTEXITCODE = 1
+}
+}
+
+# Only a real script file may pass its exit code on (powershell -File bootstrap.ps1, for
+# CI). Under `irm | iex` this is not an ExternalScript, and exiting would close the window.
+if ($MyInvocation.MyCommand.CommandType -eq 'ExternalScript') { exit $LASTEXITCODE }
